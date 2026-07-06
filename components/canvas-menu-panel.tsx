@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Clapperboard,
   Clock,
   Download,
   ExternalLink,
@@ -22,6 +23,7 @@ import {
   LayoutTemplate,
   Loader2,
   Moon,
+  Palette,
   RotateCcw,
   Route,
   Save,
@@ -32,6 +34,7 @@ import {
   Sun,
   Trash2,
   Upload,
+  UserCircle,
   Volume2,
   X,
   Info,
@@ -44,6 +47,7 @@ import { useTheme } from 'next-themes'
 
 import { cn } from '@/lib/utils'
 import { CustomNodeData, EdgeStyleType, NodeType, useFlowStore, WorkflowSnapshot } from '@/lib/store'
+import { templates as sharedTemplates } from '@/lib/templates'
 import { MaterialLibraryContent } from './material-library'
 
 export type CanvasMenuPanelType = 'templates' | 'history' | 'settings' | 'materials'
@@ -99,185 +103,16 @@ interface HistoryItem extends WorkflowSnapshot {
   createdAt: string
 }
 
-interface TemplateItem {
-  id: string
-  title: string
-  subtitle: string
-  description: string
-  tags: string[]
-  icon: typeof LayoutTemplate
-  snapshot: WorkflowSnapshot
-}
-
 const HISTORY_KEY = 'ai-canvas-history'
-const edgeStyle = { stroke: 'var(--edge-color)', strokeWidth: 2 }
 
-const nodeTypeMap: Record<NodeType, string> = {
-  text: 'textNode',
-  image: 'imageNode',
-  video: 'videoNode',
-  audio: 'audioNode',
-  script: 'scriptNode',
-  scene: 'sceneNode',
-  storyboard: 'storyboardNode',
-  promptAssistant: 'promptAssistantNode',
-  screenplay: 'screenplayNode',
+const iconMap: Record<string, typeof LayoutTemplate> = {
+  film: Film,
+  sparkles: Sparkles,
+  'user-circle': UserCircle,
+  clapperboard: Clapperboard,
+  type: FileText,
+  'image-plus': ImageIcon,
 }
-
-function workflowNode(
-  id: string,
-  type: NodeType,
-  position: { x: number; y: number },
-  data: Partial<CustomNodeData>
-): Node<CustomNodeData> {
-  return {
-    id,
-    type: nodeTypeMap[type],
-    position,
-    data: {
-      label: data.label ?? '节点',
-      type,
-      status: 'idle',
-      ...data,
-    },
-  }
-}
-
-function workflowEdge(id: string, source: string, target: string): Edge {
-  return {
-    id,
-    source,
-    target,
-    sourceHandle: 'output',
-    targetHandle: 'input',
-    type: 'default',
-    selectable: true,
-    interactionWidth: 24,
-    markerEnd: {
-      type: MarkerType.ArrowClosed,
-      width: 16,
-      height: 16,
-      color: 'var(--edge-color)',
-    },
-    style: edgeStyle,
-  }
-}
-
-const templates: TemplateItem[] = [
-  {
-    id: 'image-to-video',
-    title: '图片生成短视频',
-    subtitle: '替换首帧图片和提示词即可出片',
-    description: '适合把产品图、人物图或场景图快速转成 5-10 秒动态视频。',
-    tags: ['首帧', '文生视频', '短片'],
-    icon: Film,
-    snapshot: {
-      nodes: [
-        workflowNode('tpl-iv-prompt', 'text', { x: 80, y: 70 }, {
-          label: '视频画面描述',
-          content: '替换为你想要的视频内容:镜头运动、主体动作、氛围和风格。',
-          status: 'ready',
-        }),
-        workflowNode('tpl-iv-image', 'image', { x: 500, y: 70 }, {
-          label: '替换你的首帧图片',
-          imageUrl: 'https://images.unsplash.com/photo-1544636331-e26879cd4d9b?w=800&h=450&fit=crop',
-          mode: 'input',
-          status: 'ready',
-          meta: '上传或拖入自己的图片',
-        }),
-        workflowNode('tpl-iv-video', 'video', { x: 930, y: 95 }, {
-          label: 'AI 视频生成',
-          status: 'idle',
-          meta: '输出 16:9 · 5s',
-        }),
-      ],
-      edges: [
-        workflowEdge('tpl-iv-e1', 'tpl-iv-prompt', 'tpl-iv-video'),
-        workflowEdge('tpl-iv-e2', 'tpl-iv-image', 'tpl-iv-video'),
-      ],
-    },
-  },
-  {
-    id: 'product-commercial',
-    title: '产品广告工作流',
-    subtitle: '商品图 + 卖点脚本 + 视频成片',
-    description: '用于电商主图、品牌短片、产品发布素材,用户只要替换商品图和卖点。',
-    tags: ['产品图', '广告脚本', '成片'],
-    icon: Sparkles,
-    snapshot: {
-      nodes: [
-        workflowNode('tpl-ad-product', 'image', { x: 80, y: 80 }, {
-          label: '替换产品图片',
-          imageUrl: 'https://images.unsplash.com/photo-1608571423902-eed4a5ad8108?w=800&h=450&fit=crop',
-          mode: 'input',
-          status: 'ready',
-          meta: '透明底或场景图均可',
-        }),
-        workflowNode('tpl-ad-script', 'script', { x: 500, y: 45 }, {
-          label: '广告脚本模板',
-          content: '开场吸引注意 → 产品特写 → 3 个卖点 → 使用场景 → 结尾 CTA。',
-          status: 'ready',
-          meta: '替换品牌名和卖点',
-        }),
-        workflowNode('tpl-ad-image', 'image', { x: 500, y: 330 }, {
-          label: '场景氛围图',
-          status: 'idle',
-          meta: '可选:生成背景或分镜图',
-        }),
-        workflowNode('tpl-ad-video', 'video', { x: 950, y: 160 }, {
-          label: '广告视频输出',
-          status: 'idle',
-          meta: '9:16 / 16:9 可调整',
-        }),
-      ],
-      edges: [
-        workflowEdge('tpl-ad-e1', 'tpl-ad-product', 'tpl-ad-script'),
-        workflowEdge('tpl-ad-e2', 'tpl-ad-script', 'tpl-ad-video'),
-        workflowEdge('tpl-ad-e3', 'tpl-ad-image', 'tpl-ad-video'),
-      ],
-    },
-  },
-  {
-    id: 'character-consistency',
-    title: '角色一致性视频',
-    subtitle: '角色参考图 + 分镜描述 + 视频节点',
-    description: '适合虚拟人、IP 角色、剧情短片,先锁定角色,再生成分镜与视频。',
-    tags: ['角色参考', '分镜', '一致性'],
-    icon: ImageIcon,
-    snapshot: {
-      nodes: [
-        workflowNode('tpl-char-ref', 'image', { x: 80, y: 80 }, {
-          label: '替换角色参考图',
-          imageUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=800&h=450&fit=crop',
-          mode: 'input',
-          status: 'ready',
-          meta: '建议上传清晰半身或头像',
-        }),
-        workflowNode('tpl-char-text', 'text', { x: 500, y: 70 }, {
-          label: '角色与分镜描述',
-          content: '描述角色外观、服装、镜头动作、场景变化和情绪。',
-          status: 'ready',
-        }),
-        workflowNode('tpl-char-scene', 'image', { x: 500, y: 330 }, {
-          label: '关键分镜图',
-          status: 'idle',
-          meta: '用于锁定画面构图',
-        }),
-        workflowNode('tpl-char-video', 'video', { x: 960, y: 170 }, {
-          label: '角色视频生成',
-          status: 'idle',
-          meta: '人物一致性优先',
-        }),
-      ],
-      edges: [
-        workflowEdge('tpl-char-e1', 'tpl-char-ref', 'tpl-char-text'),
-        workflowEdge('tpl-char-e2', 'tpl-char-text', 'tpl-char-scene'),
-        workflowEdge('tpl-char-e3', 'tpl-char-ref', 'tpl-char-video'),
-        workflowEdge('tpl-char-e4', 'tpl-char-scene', 'tpl-char-video'),
-      ],
-    },
-  },
-]
 
 function getStoredHistory(): HistoryItem[] {
   if (typeof window === 'undefined') return []
@@ -382,10 +217,17 @@ export function CanvasMenuPanel({ activePanel, onClose, onAddMaterial }: CanvasM
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm animate-in fade-in duration-150"
+      className={cn(
+        "fixed inset-0 z-50 bg-black/40 backdrop-blur-sm animate-in fade-in duration-150 flex items-center justify-center",
+      )}
       onPointerDown={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="flex w-[720px] max-h-[85vh] flex-col overflow-hidden rounded-2xl border border-border/60 bg-card shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+      <div className={cn(
+        "flex flex-col overflow-hidden rounded-2xl border border-border/60 bg-card shadow-2xl animate-in fade-in zoom-in-95 duration-200",
+        activePanel === 'materials'
+          ? "w-[90vw] max-w-[1400px] h-[88vh]"
+          : "w-[720px] max-h-[85vh]"
+      )}>
         {/* ── Header ── */}
         <div className="flex items-start justify-between border-b border-border/40 px-6 py-5">
           <div>
@@ -426,7 +268,9 @@ export function CanvasMenuPanel({ activePanel, onClose, onAddMaterial }: CanvasM
         <div className="max-h-[calc(85vh-110px)] overflow-y-auto p-6">
         {activePanel === 'templates' && (
           <div className="grid grid-cols-2 gap-3">
-            {templates.map((template) => (
+            {sharedTemplates.map((template) => {
+              const Icon = iconMap[template.icon] ?? LayoutTemplate
+              return (
               <button
                 key={template.id}
                 onClick={() => applySnapshot(template.snapshot, `已载入：${template.title}`)}
@@ -434,7 +278,7 @@ export function CanvasMenuPanel({ activePanel, onClose, onAddMaterial }: CanvasM
               >
                 <div className="flex gap-3">
                   <div className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-                    <template.icon className="size-5" />
+                    <Icon className="size-5" />
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-1">
@@ -457,7 +301,8 @@ export function CanvasMenuPanel({ activePanel, onClose, onAddMaterial }: CanvasM
                   </div>
                 </div>
               </button>
-            ))}
+              )
+            })}
           </div>
         )}
 
@@ -575,7 +420,7 @@ function SettingsContent({
   const [tab, setTab] = useState<'appearance' | 'line' | 'canvas' | 'apikey' | 'about'>('appearance')
 
   const settingTabs = [
-    { id: 'appearance' as const, label: '外观主题', icon: theme === 'light' ? Sun : Moon },
+    { id: 'appearance' as const, label: '外观主题', icon: Palette },
     { id: 'line' as const,       label: '连线样式', icon: Route },
     { id: 'canvas' as const,     label: '画布管理', icon: RotateCcw },
     { id: 'apikey' as const,     label: 'API 密钥', icon: Key },

@@ -32,7 +32,7 @@ function AudioNode({ id, data, selected }: AudioNodeProps) {
 
   return (
     <NodeBase
-
+      nodeId={id}
       nodeType="audio"
       label={data.label}
       status={data.status}

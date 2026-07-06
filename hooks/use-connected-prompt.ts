@@ -1,6 +1,6 @@
 import { useFlowStore, PROMPT_HANDLE } from '@/lib/store'
 
-const PROMPT_SOURCE_TYPES = new Set(['text', 'promptAssistant', 'scene', 'storyboard'])
+const PROMPT_SOURCE_TYPES = new Set(['text', 'promptAssistant', 'scene', 'storyboard', 'graphicBrief'])
 
 function extractPromptText(type: string, content: string | undefined, sourceHandle?: string): string {
   if (!content) return ''

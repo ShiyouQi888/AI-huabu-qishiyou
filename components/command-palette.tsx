@@ -5,13 +5,14 @@ import { useReactFlow } from '@xyflow/react'
 import {
   AlignLeft,
   Download,
-  Clapperboard,
   FileCode2,
   ImageIcon,
   Moon,
+  PenTool,
   Redo2,
   RotateCcw,
   Sun,
+  Table2,
   Undo2,
   Upload,
   Video,
@@ -127,9 +128,13 @@ export function CommandPalette() {
             <FileCode2 className="text-orange-400" />
             <span>AI 编剧</span>
           </CommandItem>
-          <CommandItem onSelect={() => addNodeAtCenter('scene')}>
-            <Clapperboard className="text-cyan-400" />
-            <span>分镜</span>
+          <CommandItem onSelect={() => addNodeAtCenter('storyboard')}>
+            <Table2 className="text-teal-400" />
+            <span>分镜表</span>
+          </CommandItem>
+          <CommandItem onSelect={() => addNodeAtCenter('graphic')}>
+            <PenTool className="text-rose-400" />
+            <span>AI 平面</span>
           </CommandItem>
         </CommandGroup>
 

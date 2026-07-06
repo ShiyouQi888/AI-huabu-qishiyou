@@ -23,6 +23,14 @@ export function VideoPlayer({ src, className, onLoadedMetadata, downloadName }: 
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [muted, setMuted] = useState(true)
+
+  const toggleMute = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    const v = videoRef.current
+    if (!v) return
+    v.muted = !v.muted
+    setMuted(v.muted)
+  }, [])
   const [showControls, setShowControls] = useState(true)
   const [ended, setEnded] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -112,7 +120,7 @@ export function VideoPlayer({ src, className, onLoadedMetadata, downloadName }: 
       <video
         ref={videoRef}
         src={src}
-        muted={muted}
+        muted
         playsInline
         preload="metadata"
         onLoadedMetadata={handleMetadata}
@@ -165,7 +173,7 @@ export function VideoPlayer({ src, className, onLoadedMetadata, downloadName }: 
 
           <div className="flex-1" />
 
-          <button onClick={(e) => { e.stopPropagation(); setMuted(!muted) }} className="flex size-6 items-center justify-center rounded-md text-white/60 transition-colors hover:text-white" title={muted ? '取消静音' : '静音'}>
+          <button onPointerDown={(e) => e.stopPropagation()} onClick={toggleMute} className="flex size-6 items-center justify-center rounded-md text-white/60 transition-colors hover:text-white" title={muted ? '取消静音' : '静音'}>
             {muted ? <VolumeX className="size-3.5" /> : <Volume2 className="size-3.5" />}
           </button>
 

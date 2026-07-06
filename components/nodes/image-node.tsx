@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils'
 import { useModels } from '@/hooks/use-models'
 import { useConnectedPrompt } from '@/hooks/use-connected-prompt'
 import { saveToLibrary } from '@/lib/save-to-library'
+import { getStoryboardRowData } from '@/lib/storyboard-utils'
 
 type Tab = 'prompt' | 'text2img' | 'img2img' | 'ref'
 type Ratio = '1:1' | '4:3' | '16:9' | '9:16' | '3:4'
@@ -54,7 +55,7 @@ function ImageInputNode({ id, data, selected }: ImageNodeProps) {
 
   return (
     <NodeBase
-
+      nodeId={id}
       nodeType="image"
       label={data.label}
       status={data.status}
@@ -100,11 +101,6 @@ function ImageInputNode({ id, data, selected }: ImageNodeProps) {
             >
               <X className="size-3.5" />
             </button>
-            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 px-2 py-2">
-              <p className="truncate text-[13px] text-white/90">
-                {naturalSize ? `${naturalSize.w}×${naturalSize.h}` : ''}{data.meta ? ` · ${data.meta as string}` : ''}
-              </p>
-            </div>
           </>
         ) : (
           <div
@@ -127,9 +123,11 @@ function ImageInputNode({ id, data, selected }: ImageNodeProps) {
   )
 }
 
-// ─── Result node: shows generated image ──────────────────────────────────────
+// ─── Result node: shows generated/uploaded image, supports both upload & AI gen ─
 function ImageResultNode({ id, data, selected }: ImageNodeProps) {
   const deleteNode = useFlowStore((s) => s.deleteNode)
+  const updateNodeData = useFlowStore((s) => s.updateNodeData)
+  const openMaterialPicker = useFlowStore((s) => s.openMaterialPicker)
   const [aspectRatio, setAspectRatio] = useState<number>(1)
   const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null)
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
@@ -140,13 +138,20 @@ function ImageResultNode({ id, data, selected }: ImageNodeProps) {
     setNaturalSize({ w: img.naturalWidth, h: img.naturalHeight })
   }
 
+  const handleClear = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    updateNodeData(id, { imageUrl: undefined, status: 'idle', meta: undefined })
+    setAspectRatio(1)
+    setNaturalSize(null)
+  }
+
   const nodeWidth = naturalSize
     ? Math.max(220, Math.min(460, Math.round(280 * aspectRatio)))
     : 280
 
   return (
     <NodeBase
-
+      nodeId={id}
       nodeType="image"
       label={data.label}
       status={data.status}
@@ -175,10 +180,23 @@ function ImageResultNode({ id, data, selected }: ImageNodeProps) {
                 <Maximize2 className="size-5 text-white drop-shadow-md opacity-0 scale-75 transition-all delay-75 duration-200 group-hover/img:opacity-100 group-hover/img:scale-100" />
               </div>
             </div>
-            <div className="absolute inset-x-0 bottom-0 flex items-end justify-between bg-gradient-to-t from-black/70 px-2 py-2">
-              <p className="truncate text-[13px] text-white/80">
-                {naturalSize ? `${naturalSize.w}×${naturalSize.h}` : ''}{data.meta ? ` · ${data.meta as string}` : ''}
-              </p>
+            <button
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); openMaterialPicker(id) }}
+              className="absolute right-10 top-2 flex size-7 items-center justify-center rounded-lg bg-background/80 text-foreground backdrop-blur-sm transition-all hover:bg-background hover:scale-105"
+              title="从资源库替换"
+            >
+              <Upload className="size-3.5" />
+            </button>
+            <button
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={handleClear}
+              className="absolute right-2 top-2 flex size-7 items-center justify-center rounded-lg bg-background/80 text-foreground backdrop-blur-sm transition-all hover:bg-destructive hover:text-white hover:scale-105"
+              title="清除图片"
+            >
+              <X className="size-3.5" />
+            </button>
+            <div className="absolute right-2 bottom-2 flex items-center">
               <button
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
@@ -195,14 +213,24 @@ function ImageResultNode({ id, data, selected }: ImageNodeProps) {
               </button>
             </div>
           </>
-        ) : (
+        ) : data.status === 'generating' ? (
           <div className="flex h-full flex-col items-center justify-center gap-2">
-            {data.status === 'generating'
-              ? <div className="size-6 animate-spin rounded-full border-2 border-muted-foreground/20 border-t-muted-foreground" />
-              : <ImageIcon className="size-8 text-muted-foreground/20" />}
-            <p className="text-[14px] text-muted-foreground/50">
-              {data.status === 'generating' ? '生成中…' : '等待生成'}
-            </p>
+            <div className="size-6 animate-spin rounded-full border-2 border-muted-foreground/20 border-t-muted-foreground" />
+            <p className="text-[14px] text-muted-foreground/50">生成中…</p>
+          </div>
+        ) : (
+          <div
+            role="button"
+            tabIndex={0}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => openMaterialPicker(id)}
+            onKeyDown={(e) => e.key === 'Enter' && openMaterialPicker(id)}
+            className="flex size-full cursor-pointer flex-col items-center justify-center gap-2 transition-colors hover:bg-muted/50"
+          >
+            <div className="flex size-10 items-center justify-center rounded-xl bg-muted/60">
+              <Upload className="size-4 text-muted-foreground" />
+            </div>
+            <p className="text-[14px] text-muted-foreground">上传或等待生图</p>
           </div>
         )}
       </div>
@@ -222,7 +250,13 @@ const TAB_HANDLES: Record<Tab, string> = {
 // ─── Tool node: prompt + params, no upload area ───────────────────────────────
 function ImageToolNode({ id, data, selected }: ImageNodeProps) {
   const [tab, setTab] = useState<Tab>('prompt')
-  const [ratio, setRatio] = useState<Ratio>('16:9')
+  const [ratio, setRatio] = useState<Ratio>(() => {
+    try {
+      const m = JSON.parse(data.meta as string) as { ratio?: string }
+      if (m.ratio && (RATIOS as readonly string[]).includes(m.ratio)) return m.ratio as Ratio
+    } catch {}
+    return '16:9'
+  })
   const [count, setCount] = useState(1)
   const [isGenerating, setIsGenerating] = useState(false)
   const [prompt, setPrompt] = useState<string>((data.content as string) || '')
@@ -256,11 +290,11 @@ function ImageToolNode({ id, data, selected }: ImageNodeProps) {
         body: JSON.stringify({
           model: 'doubao-seed-2-0-pro-260215',
           prompt,
-          systemPrompt: `你是一个专业的AI绘画提示词优化师。请将用户输入优化为一个高质量的绘画提示词。要求:
+          systemPrompt: `你是一个专业的AI绘画提示词优化师。请将用户输入优化为一个高质量的中文绘画提示词。要求:
 1. 如果输入是简短描述,扩展细节(光线、构图、风格、材质、色彩)
 2. 如果输入已经详细,保持原意但让表达更精准
-3. 添加合适的画质关键词(如 8K、大师作品、超精细等)
-4. 只返回优化后的提示词,不要解释`,
+3. 添加合适的画质关键词(如超高清、大师作品、超精细、精细细节等)
+4. 全部使用中文，只返回优化后的提示词，不要解释`,
           temperature: 0.7,
           maxTokens: 800,
         }),
@@ -342,10 +376,10 @@ function ImageToolNode({ id, data, selected }: ImageNodeProps) {
     updateNodeData(id, { status: 'generating' })
 
     try {
-      // 收集参考图 URL（从左侧连接的 input 节点获取）
+      // 收集参考图 URL（从左侧连接的所有 input 节点获取）
       const state = useFlowStore.getState()
       const edges = state.edges || []
-      const incomingEdge = edges.find(
+      const incomingEdges = edges.filter(
         (e: Record<string, unknown>) => {
           if (e.target !== id || e.targetHandle !== TAB_HANDLES[tab]) return false
           const src = state.nodes?.find((n: Record<string, unknown>) => n.id === e.source)
@@ -354,13 +388,22 @@ function ImageToolNode({ id, data, selected }: ImageNodeProps) {
         },
       )
       let referenceImage: string | undefined
-      if (incomingEdge) {
+      const referenceImages: string[] = []
+      for (const incomingEdge of incomingEdges) {
         const sourceNode = state.nodes?.find(
           (n: Record<string, unknown>) => n.id === incomingEdge.source,
         )
-        const nodeData = sourceNode?.data as Record<string, unknown> | undefined
-        referenceImage = (nodeData?.imageUrl as string | undefined) || undefined
+        if (!sourceNode) continue
+        const sbRow = getStoryboardRowData(sourceNode as any, (incomingEdge as any).sourceHandle ?? undefined)
+        if (sbRow) {
+          referenceImages.push(...sbRow.sceneImages, ...sbRow.characterImages)
+        } else {
+          const nodeData = sourceNode?.data as Record<string, unknown> | undefined
+          const url = (nodeData?.imageUrl as string | undefined) || undefined
+          if (url) referenceImages.push(url)
+        }
       }
+      referenceImage = referenceImages[0]
 
       const standardSize: Record<Ratio, string> = {
         '1:1':   '1024x1024',
@@ -392,6 +435,7 @@ function ImageToolNode({ id, data, selected }: ImageNodeProps) {
           height: resH,
           count,
           referenceImage: tab === 'img2img' || tab === 'ref' ? referenceImage : undefined,
+          referenceImages: (tab === 'img2img' || tab === 'ref') && referenceImages.length > 1 ? referenceImages : undefined,
         }),
       })
 
@@ -405,16 +449,31 @@ function ImageToolNode({ id, data, selected }: ImageNodeProps) {
 
       if (imageUrl) {
         updateNodeData(id, { status: 'completed' })
-        // 为每个生成结果创建 result 节点
-        for (let i = 0; i < count; i++) {
-          setTimeout(() => {
-            addResultNode(id, 'image', {
-              imageUrl,
-              status: 'completed',
-              meta: ratio,
-              mode: 'result',
-            })
-          }, i * 150)
+        // If pre-created empty result nodes exist (from extraction flow), update them in place
+        const currentState = useFlowStore.getState()
+        const outEdges = currentState.edges.filter(
+          (e) => e.source === id && (e.sourceHandle === 'output' || !e.sourceHandle)
+        )
+        const emptyResultNodes = outEdges
+          .map((e) => currentState.nodes.find((n) => n.id === e.target))
+          .filter((n): n is Node<CustomNodeData> =>
+            !!n && n.data.mode === 'result' && !n.data.imageUrl
+          )
+        if (emptyResultNodes.length > 0) {
+          emptyResultNodes.slice(0, count).forEach((resultNode) => {
+            updateNodeData(resultNode.id, { imageUrl, status: 'completed', meta: ratio })
+          })
+        } else {
+          for (let i = 0; i < count; i++) {
+            setTimeout(() => {
+              addResultNode(id, 'image', {
+                imageUrl,
+                status: 'completed',
+                meta: ratio,
+                mode: 'result',
+              })
+            }, i * 150)
+          }
         }
         saveToLibrary({ url: imageUrl, title: `${data.label} · ${ratio}`, type: 'image' })
       } else {
@@ -431,7 +490,7 @@ function ImageToolNode({ id, data, selected }: ImageNodeProps) {
   return (
     <NodeBase
       ref={wrapperRef}
-
+      nodeId={id}
       nodeType="image"
       label={data.label}
       status={data.status}

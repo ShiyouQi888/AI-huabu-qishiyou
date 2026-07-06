@@ -52,7 +52,7 @@ async function apiFetch(
           ...extraHeaders,
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(120_000),
+        signal: AbortSignal.timeout(300_000),
       })
 
       if (!resp.ok) {

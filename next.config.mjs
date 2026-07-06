@@ -6,6 +6,9 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  experimental: {
+    serverBodySizeLimit: '10mb',
+  },
 }
 
 export default nextConfig

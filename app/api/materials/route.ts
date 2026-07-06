@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server'
-import { readFile, writeFile, mkdir, unlink } from 'fs/promises'
+import { readFile, writeFile, mkdir, stat, unlink } from 'fs/promises'
 import { existsSync } from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
+import { getAuthUser } from '@/lib/auth'
 
-const DATA_DIR = path.join(process.cwd(), 'data')
-const DATA_FILE = path.join(DATA_DIR, 'materials.json')
+const DATA_DIR = path.join(process.cwd(), 'data', 'materials')
 const UPLOAD_DIR = path.join(process.cwd(), 'public', 'uploads', 'materials')
-const MAX_SIZE = 100 * 1024 * 1024
+const MAX_SIZE = 10 * 1024 * 1024
 
 interface StoredMaterial {
   id: string
@@ -38,11 +38,18 @@ const DEFAULT_CATEGORIES = [
   { id: 'other', label: '其他' },
 ]
 
-async function loadStore(): Promise<MaterialStore> {
+async function userDataFile(userId: string): Promise<string> {
+  await mkdir(DATA_DIR, { recursive: true })
+  return path.join(DATA_DIR, `${userId}.json`)
+}
+
+async function loadStore(userId: string): Promise<MaterialStore> {
   try {
-    if (!existsSync(DATA_FILE)) return { categories: [...DEFAULT_CATEGORIES], materials: [] }
-    const raw = await readFile(DATA_FILE, 'utf-8')
+    const file = await userDataFile(userId)
+    if (!existsSync(file)) return { categories: [...DEFAULT_CATEGORIES], materials: [] }
+    const raw = await readFile(file, 'utf-8')
     const store: MaterialStore = JSON.parse(raw)
+    // Ensure all default categories exist
     const existingIds = new Set(store.categories.map((c) => c.id))
     for (const def of DEFAULT_CATEGORIES) {
       if (!existingIds.has(def.id)) store.categories.unshift(def)
@@ -53,46 +60,58 @@ async function loadStore(): Promise<MaterialStore> {
   }
 }
 
-async function saveStore(store: MaterialStore) {
-  await mkdir(DATA_DIR, { recursive: true })
-  await writeFile(DATA_FILE, JSON.stringify(store, null, 2))
+async function saveStore(userId: string, store: MaterialStore) {
+  const file = await userDataFile(userId)
+  await writeFile(file, JSON.stringify(store, null, 2))
 }
 
 export async function GET() {
-  const store = await loadStore()
+  const user = await getAuthUser()
+  if (!user) return NextResponse.json({ error: '未登录' }, { status: 401 })
+
+  const store = await loadStore(user.id)
   return NextResponse.json(store)
 }
 
 export async function POST(request: Request) {
+  const user = await getAuthUser()
+  if (!user) return NextResponse.json({ error: '未登录' }, { status: 401 })
+
   try {
     const contentType = request.headers.get('content-type') || ''
 
     if (contentType.includes('application/json')) {
-      const body = await request.json()
-      const store = await loadStore()
+      const body = await request.json() as {
+        action: string
+        id?: string
+        label?: string
+        url?: string
+        title?: string
+        type?: string
+        category?: string
+        thumbnail?: string
+      }
+      const store = await loadStore(user.id)
 
       if (body.action === 'add-category') {
         const { id, label } = body
         if (!id || !label) return NextResponse.json({ error: '缺少分类信息' }, { status: 400 })
-        if (store.categories.some((c: { id: string }) => c.id === id)) {
+        if (store.categories.some((c) => c.id === id)) {
           return NextResponse.json({ error: '分类已存在' }, { status: 409 })
         }
         store.categories.push({ id, label })
-        await saveStore(store)
+        await saveStore(user.id, store)
         return NextResponse.json({ categories: store.categories })
       }
 
       if (body.action === 'register-local') {
-        const { url, title, type, category, thumbnail } = body as {
-          url: string; title: string; type: string; category: string; thumbnail?: string
-        }
+        const { url, title, type, category, thumbnail } = body
         if (!url || !type) return NextResponse.json({ error: '缺少 url / type' }, { status: 400 })
 
-        const id = randomUUID()
-        const filename = url.split('/').pop() || id
+        const matId = randomUUID()
+        const filename = url.split('/').pop() || matId
         let fileSize = 0
         try {
-          const { stat } = await import('fs/promises')
           const filePath = path.join(process.cwd(), 'public', url)
           const s = await stat(filePath)
           fileSize = s.size
@@ -104,14 +123,17 @@ export async function POST(request: Request) {
           : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg'
           : ext === '.mp4' ? 'video/mp4'
           : ext === '.webm' ? 'video/webm'
-          : type === 'image' ? 'image/png' : 'video/mp4'
+          : ext === '.mp3' ? 'audio/mp3'
+          : type === 'image' ? 'image/png'
+          : type === 'video' ? 'video/mp4'
+          : 'application/octet-stream'
 
         let thumbnailUrl: string | undefined
         if (thumbnail?.startsWith('data:')) {
           const thumbData = thumbnail.split(',')[1]
           if (thumbData) {
             await mkdir(UPLOAD_DIR, { recursive: true })
-            const thumbName = `${id}-thumb.jpg`
+            const thumbName = `${matId}-thumb.jpg`
             await writeFile(path.join(UPLOAD_DIR, thumbName), Buffer.from(thumbData, 'base64'))
             thumbnailUrl = `/uploads/materials/${thumbName}`
           }
@@ -119,32 +141,35 @@ export async function POST(request: Request) {
         if (!thumbnailUrl && type === 'image') thumbnailUrl = url
 
         const cat = category || (type === 'image' ? 'ai-image' : type === 'video' ? 'ai-video' : 'other')
-        if (!store.categories.some((c: { id: string }) => c.id === cat)) {
-          const label = cat === 'ai-image' ? 'AI图片' : cat === 'ai-video' ? 'AI视频' : cat
-          store.categories.push({ id: cat, label })
+        if (!store.categories.some((c) => c.id === cat)) {
+          const catLabel = cat === 'ai-image' ? 'AI图片' : cat === 'ai-video' ? 'AI视频' : cat
+          store.categories.push({ id: cat, label: catLabel })
         }
 
         const material: StoredMaterial = {
-          id, title: title || `AI ${type} ${new Date().toLocaleTimeString()}`,
-          type, category: cat, url, thumbnail: thumbnailUrl,
-          filename, size: fileSize, mimeType,
+          id: matId,
+          title: title || `AI ${type} ${new Date().toLocaleTimeString()}`,
+          type,
+          category: cat,
+          url,
+          thumbnail: thumbnailUrl,
+          filename,
+          size: fileSize,
+          mimeType,
           createdAt: new Date().toISOString(),
         }
         store.materials.unshift(material)
-        await saveStore(store)
+        await saveStore(user.id, store)
         return NextResponse.json(material)
       }
 
       if (body.action === 'save-from-url') {
-        const { url, title, type, category, thumbnail } = body as {
-          url: string; title: string; type: string; category: string; thumbnail?: string
-        }
+        const { url, title, type, category, thumbnail } = body
         if (!url || !type) return NextResponse.json({ error: '缺少 url / type' }, { status: 400 })
 
         await mkdir(UPLOAD_DIR, { recursive: true })
-        const id = randomUUID()
+        const matId = randomUUID()
 
-        // Download the file from URL (with retry for transient network errors)
         let resp: Response | undefined
         for (let attempt = 0; attempt <= 3; attempt++) {
           try {
@@ -152,73 +177,72 @@ export async function POST(request: Request) {
             if (resp.ok) break
           } catch (e: unknown) {
             const err = e instanceof Error ? e : undefined
-            const msg = [err?.message, (err?.cause as Error | undefined)?.message, (err?.cause as Record<string, unknown> | undefined)?.code].join(' ')
+            const msg = [err?.message, (err?.cause as Error | undefined)?.message].join(' ')
             const retryable = /timeout|ECONNRESET|ECONNREFUSED|ENOTFOUND|UND_ERR|fetch failed/i.test(msg)
             if (!retryable || attempt === 3) throw e
-            console.log(`[素材下载] 失败，${(attempt + 1) * 3}s 后重试 (${attempt + 1}/3)...`)
-            await new Promise(r => setTimeout(r, (attempt + 1) * 3000))
+            await new Promise((r) => setTimeout(r, (attempt + 1) * 3000))
           }
         }
-        if (!resp || !resp.ok) return NextResponse.json({ error: '下载文件失败' }, { status: 502 })
+        if (!resp?.ok) return NextResponse.json({ error: '下载文件失败' }, { status: 502 })
 
-        const contentType = resp.headers.get('content-type') || ''
-        const ext = contentType.includes('png') ? '.png'
-          : contentType.includes('webp') ? '.webp'
-          : contentType.includes('mp4') ? '.mp4'
-          : contentType.includes('webm') ? '.webm'
+        const ct = resp.headers.get('content-type') || ''
+        const ext = ct.includes('png') ? '.png'
+          : ct.includes('webp') ? '.webp'
+          : ct.includes('mp4') ? '.mp4'
+          : ct.includes('webm') ? '.webm'
           : type === 'image' ? '.png' : '.mp4'
 
-        const diskName = `${id}${ext}`
+        const diskName = `${matId}${ext}`
         const buffer = Buffer.from(await resp.arrayBuffer())
         await writeFile(path.join(UPLOAD_DIR, diskName), buffer)
         const savedUrl = `/uploads/materials/${diskName}`
 
-        // Save thumbnail if provided (base64 data URL)
         let thumbnailUrl: string | undefined
         if (thumbnail?.startsWith('data:')) {
-          const thumbId = `${id}-thumb`
           const thumbData = thumbnail.split(',')[1]
           if (thumbData) {
-            const thumbBuf = Buffer.from(thumbData, 'base64')
-            const thumbName = `${thumbId}.jpg`
-            await writeFile(path.join(UPLOAD_DIR, thumbName), thumbBuf)
+            const thumbName = `${matId}-thumb.jpg`
+            await writeFile(path.join(UPLOAD_DIR, thumbName), Buffer.from(thumbData, 'base64'))
             thumbnailUrl = `/uploads/materials/${thumbName}`
           }
         }
         if (!thumbnailUrl && type === 'image') thumbnailUrl = savedUrl
 
         const cat = category || (type === 'image' ? 'ai-image' : type === 'video' ? 'ai-video' : 'other')
-        // Ensure category exists
-        if (!store.categories.some((c: { id: string }) => c.id === cat)) {
-          const label = cat === 'ai-image' ? 'AI图片' : cat === 'ai-video' ? 'AI视频' : cat
-          store.categories.push({ id: cat, label })
+        if (!store.categories.some((c) => c.id === cat)) {
+          const catLabel = cat === 'ai-image' ? 'AI图片' : cat === 'ai-video' ? 'AI视频' : cat
+          store.categories.push({ id: cat, label: catLabel })
         }
 
         const material: StoredMaterial = {
-          id, title: title || `AI ${type} ${new Date().toLocaleTimeString()}`,
-          type, category: cat, url: savedUrl, thumbnail: thumbnailUrl,
-          filename: diskName, size: buffer.length,
-          mimeType: contentType || (type === 'image' ? 'image/png' : 'video/mp4'),
+          id: matId,
+          title: title || `AI ${type} ${new Date().toLocaleTimeString()}`,
+          type,
+          category: cat,
+          url: savedUrl,
+          thumbnail: thumbnailUrl,
+          filename: diskName,
+          size: buffer.length,
+          mimeType: ct || (type === 'image' ? 'image/png' : 'video/mp4'),
           createdAt: new Date().toISOString(),
         }
         store.materials.unshift(material)
-        await saveStore(store)
+        await saveStore(user.id, store)
         return NextResponse.json(material)
       }
 
       if (body.action === 'delete-category') {
         const { id } = body
-        store.categories = store.categories.filter((c: { id: string }) => c.id !== id)
-        store.materials.forEach((m: StoredMaterial) => {
-          if (m.category === id) m.category = 'other'
-        })
-        await saveStore(store)
+        store.categories = store.categories.filter((c) => c.id !== id)
+        store.materials.forEach((m) => { if (m.category === id) m.category = 'other' })
+        await saveStore(user.id, store)
         return NextResponse.json({ categories: store.categories })
       }
 
       return NextResponse.json({ error: '未知操作' }, { status: 400 })
     }
 
+    // ── multipart/form-data 文件上传 ──
     const formData = await request.formData()
     const file = formData.get('file')
     const title = (formData.get('title') as string) || ''
@@ -244,37 +268,33 @@ export async function POST(request: Request) {
     }
 
     await mkdir(UPLOAD_DIR, { recursive: true })
-
-    const id = randomUUID()
+    const matId = randomUUID()
     const ext = path.extname(file.name) || `.${file.type.split('/')[1]}`
-    const diskName = `${id}${ext}`
+    const diskName = `${matId}${ext}`
     const buffer = Buffer.from(await file.arrayBuffer())
     await writeFile(path.join(UPLOAD_DIR, diskName), buffer)
-
     const url = `/uploads/materials/${diskName}`
 
-    // Save thumbnail if provided as base64 data URL
     let thumbnailUrl: string | undefined
     if (thumbnailData.startsWith('data:')) {
       const thumbB64 = thumbnailData.split(',')[1]
       if (thumbB64) {
         const thumbBuf = Buffer.from(thumbB64, 'base64')
-        const thumbName = `${id}-thumb.jpg`
+        const thumbName = `${matId}-thumb.jpg`
         await writeFile(path.join(UPLOAD_DIR, thumbName), thumbBuf)
         thumbnailUrl = `/uploads/materials/${thumbName}`
       }
     }
     if (!thumbnailUrl && type === 'image') thumbnailUrl = url
 
-    // Ensure category exists
-    const store = await loadStore()
-    if (!store.categories.some((c: { id: string }) => c.id === category)) {
-      const label = category === 'ai-image' ? 'AI图片' : category === 'ai-video' ? 'AI视频' : category
-      store.categories.push({ id: category, label })
+    const store = await loadStore(user.id)
+    if (!store.categories.some((c) => c.id === category)) {
+      const catLabel = category === 'ai-image' ? 'AI图片' : category === 'ai-video' ? 'AI视频' : category
+      store.categories.push({ id: category, label: catLabel })
     }
 
     const material: StoredMaterial = {
-      id,
+      id: matId,
       title: title || file.name.replace(/\.[^.]+$/, ''),
       type,
       category,
@@ -285,31 +305,32 @@ export async function POST(request: Request) {
       mimeType: file.type,
       createdAt: new Date().toISOString(),
     }
-
     store.materials.unshift(material)
-    await saveStore(store)
-
+    await saveStore(user.id, store)
     return NextResponse.json(material)
   } catch (err) {
-    console.error('Material upload error:', err)
-    return NextResponse.json({ error: '上传失败' }, { status: 500 })
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('Material upload error:', msg)
+    return NextResponse.json({ error: `上传失败: ${msg}` }, { status: 500 })
   }
 }
 
 export async function PATCH(request: Request) {
+  const user = await getAuthUser()
+  if (!user) return NextResponse.json({ error: '未登录' }, { status: 401 })
+
   try {
-    const body = await request.json()
+    const body = await request.json() as { id: string; title?: string; category?: string }
     const { id, title, category } = body
     if (!id) return NextResponse.json({ error: '缺少素材 ID' }, { status: 400 })
 
-    const store = await loadStore()
-    const material = store.materials.find((m: StoredMaterial) => m.id === id)
+    const store = await loadStore(user.id)
+    const material = store.materials.find((m) => m.id === id)
     if (!material) return NextResponse.json({ error: '素材不存在' }, { status: 404 })
 
     if (title !== undefined) material.title = title
     if (category !== undefined) material.category = category
-    await saveStore(store)
-
+    await saveStore(user.id, store)
     return NextResponse.json(material)
   } catch (err) {
     console.error('Material update error:', err)
@@ -318,22 +339,34 @@ export async function PATCH(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const user = await getAuthUser()
+  if (!user) return NextResponse.json({ error: '未登录' }, { status: 401 })
+
   try {
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')
     if (!id) return NextResponse.json({ error: '缺少素材 ID' }, { status: 400 })
 
-    const store = await loadStore()
-    const idx = store.materials.findIndex((m: StoredMaterial) => m.id === id)
+    const store = await loadStore(user.id)
+    const idx = store.materials.findIndex((m) => m.id === id)
     if (idx === -1) return NextResponse.json({ error: '素材不存在' }, { status: 404 })
 
     const [removed] = store.materials.splice(idx, 1)
+
+    // Delete file from disk
     try {
       await unlink(path.join(process.cwd(), 'public', removed.url))
-    } catch { /* file may already be deleted */ }
+    } catch { /* already deleted */ }
 
-    await saveStore(store)
-    return NextResponse.json({ success: true })
+    // Delete thumbnail from disk if separate
+    if (removed.thumbnail && removed.thumbnail !== removed.url) {
+      try {
+        await unlink(path.join(process.cwd(), 'public', removed.thumbnail))
+      } catch { /* already deleted */ }
+    }
+
+    await saveStore(user.id, store)
+    return NextResponse.json({ ok: true })
   } catch (err) {
     console.error('Material delete error:', err)
     return NextResponse.json({ error: '删除失败' }, { status: 500 })

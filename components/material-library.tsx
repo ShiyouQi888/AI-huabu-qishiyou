@@ -90,6 +90,8 @@ export function MaterialLibraryContent({ onAddMaterial }: {
   const [uploading, setUploading] = useState(0)
   const [dragOver, setDragOver] = useState(false)
 
+  const [uploadError, setUploadError] = useState<string | null>(null)
+
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
   const [menuId, setMenuId] = useState<string | null>(null)
@@ -137,9 +139,16 @@ export function MaterialLibraryContent({ onAddMaterial }: {
 
   // ── Upload ────────────────────────────────────────
   const uploadFiles = useCallback(async (files: FileList | File[]) => {
-    const arr = Array.from(files).filter(
+    const MAX_FILE_MB = 10
+    const all = Array.from(files).filter(
       (f) => f.type.startsWith('image/') || f.type.startsWith('video/') || f.type.startsWith('audio/'),
     )
+    const oversized = all.filter((f) => f.size > MAX_FILE_MB * 1024 * 1024)
+    if (oversized.length) {
+      setUploadError(`文件过大（最大 ${MAX_FILE_MB} MB）：${oversized.map((f) => f.name).join('、')}`)
+      return
+    }
+    const arr = all
     if (!arr.length) return
     setUploading((n) => n + arr.length)
     for (const file of arr) {
@@ -148,11 +157,16 @@ export function MaterialLibraryContent({ onAddMaterial }: {
         fd.append('file', file)
         fd.append('category', activeTab !== 'all' ? activeTab : 'other')
         const res = await fetch('/api/materials', { method: 'POST', body: fd })
-        if (!res.ok) throw new Error()
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({})) as { error?: string }
+          throw new Error(body.error ?? `HTTP ${res.status}`)
+        }
         const mat: ApiMaterial = await res.json()
         setRawMaterials((prev) => [mat, ...prev])
       } catch (err) {
-        console.error('素材上传失败:', err)
+        const msg = err instanceof Error ? err.message : '上传失败'
+        setUploadError(msg)
+        console.error('素材上传失败:', msg)
       } finally {
         setUploading((n) => n - 1)
       }
@@ -253,6 +267,15 @@ export function MaterialLibraryContent({ onAddMaterial }: {
       <div className="flex items-center justify-between border-b border-border/40 px-5 py-3.5 shrink-0">
         <h2 className="text-[14px] font-semibold">我的素材</h2>
         <div className="flex items-center gap-2">
+          {uploadError && (
+            <span
+              className="flex items-center gap-1.5 text-[12px] text-destructive cursor-pointer"
+              onClick={() => setUploadError(null)}
+              title="点击关闭"
+            >
+              ✕ {uploadError}
+            </span>
+          )}
           {uploading > 0 && (
             <span className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
               <Loader2 className="size-3.5 animate-spin" />
@@ -369,11 +392,11 @@ export function MaterialLibraryContent({ onAddMaterial }: {
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-5">
               {/* Upload card */}
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="group flex aspect-[4/3] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border/60 bg-muted/20 transition-colors hover:border-border hover:bg-muted/40"
+                className="group flex aspect-[4/3] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border/80 bg-muted/20 transition-colors hover:border-primary/40 hover:bg-muted/40"
               >
                 <div className="flex size-9 items-center justify-center rounded-xl bg-muted/60 transition-colors group-hover:bg-muted">
                   <Plus className="size-4 text-muted-foreground" />
@@ -392,7 +415,7 @@ export function MaterialLibraryContent({ onAddMaterial }: {
                 return (
                   <div
                     key={material.id}
-                    className="group relative overflow-hidden rounded-xl border border-border/50 bg-muted/20 text-left transition-all hover:border-border hover:bg-muted/40 hover:shadow-md"
+                    className="group relative overflow-hidden rounded-xl border border-border/80 bg-muted/20 text-left transition-all hover:border-border hover:bg-muted/40 hover:shadow-md"
                   >
                     {/* Thumbnail */}
                     <div
@@ -545,10 +568,10 @@ export function MaterialLibrary({ isOpen, onClose, onAddMaterial }: {
   if (!isOpen) return null
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4"
+      className="fixed left-[240px] right-0 top-0 bottom-0 z-50 bg-black/50 backdrop-blur-sm"
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="w-full max-w-[780px] h-[80vh] flex flex-col overflow-hidden rounded-2xl border border-border/60 bg-card shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+      <div className="absolute inset-5 flex flex-col overflow-hidden rounded-2xl border border-border/60 bg-card shadow-2xl animate-in fade-in zoom-in-95 duration-150">
         <MaterialLibraryContent onAddMaterial={onAddMaterial} />
       </div>
     </div>

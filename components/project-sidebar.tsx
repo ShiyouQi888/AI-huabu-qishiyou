@@ -12,9 +12,14 @@ import {
   FolderOpen,
   Check,
   X,
+  LogOut,
+  Calendar,
+  Mail,
+  User,
+  Settings,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useProjectStore, Project } from '@/lib/project-store'
+import { useProjectStore, Project, initStoreForUser } from '@/lib/project-store'
 
 export function ProjectSidebar() {
   const {
@@ -308,12 +313,117 @@ export function ProjectSidebar() {
         </div>
       </div>
 
-      {/* Footer */}
-      <div className="border-t border-border/30 px-3 py-2">
-        <div className="text-center text-[10px] text-muted-foreground/30">
-          数据保存在本地浏览器
+      {/* User profile footer */}
+      <UserProfileFooter />
+    </div>
+  )
+}
+
+function UserProfileFooter() {
+  const [user, setUser] = useState<{ id: string; username: string; email?: string; createdAt: string } | null>(null)
+  const [cardOpen, setCardOpen] = useState(false)
+  const cardRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    fetch('/api/auth/me')
+      .then((r) => r.json())
+      .then((d) => {
+        const u = d.user ?? null
+        setUser(u)
+        if (u?.id) initStoreForUser(u.id)
+      })
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (!cardOpen) return
+    const handler = (e: MouseEvent) => {
+      if (cardRef.current && !cardRef.current.contains(e.target as Node)) setCardOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [cardOpen])
+
+  const handleLogout = async () => {
+    initStoreForUser(null)
+    await fetch('/api/auth/logout', { method: 'POST' })
+    window.location.href = '/login'
+  }
+
+  if (!user) return null
+
+  const initial = user.username.charAt(0).toUpperCase()
+  const joined = user.createdAt
+    ? new Date(user.createdAt).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })
+    : ''
+
+  return (
+    <div className="relative border-t border-border/30 px-3 py-2.5">
+      <button
+        onClick={() => setCardOpen(!cardOpen)}
+        className="flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 transition-colors hover:bg-muted/40"
+      >
+        <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary/80 to-primary/40 text-[13px] font-bold text-white shadow-md shadow-primary/20">
+          {initial}
         </div>
-      </div>
+        <div className="min-w-0 flex-1 text-left">
+          <div className="truncate text-[12px] font-medium text-foreground/80">{user.username}</div>
+          <div className="truncate text-[10px] text-muted-foreground/40">
+            {user.email ?? '未绑定邮箱'}
+          </div>
+        </div>
+      </button>
+
+      {cardOpen && (
+        <div
+          ref={cardRef}
+          className="absolute bottom-full left-3 right-3 z-50 mb-2 overflow-hidden rounded-2xl border border-border/40 bg-popover shadow-2xl animate-in fade-in slide-in-from-bottom-2 duration-150"
+        >
+          {/* Card header */}
+          <div className="flex items-center gap-3 px-4 py-4">
+            <div className="flex size-11 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary/80 to-primary/40 text-[16px] font-bold text-white shadow-lg shadow-primary/20">
+              {initial}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[14px] font-semibold text-foreground">{user.username}</div>
+              {joined && (
+                <div className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground/50">
+                  <Calendar className="size-3" />
+                  {joined} 加入
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Card info */}
+          {user.email && (
+            <div className="border-t border-border/20 px-4 py-2.5">
+              <div className="flex items-center gap-2 text-[11px] text-muted-foreground/50">
+                <Mail className="size-3 shrink-0" />
+                <span className="truncate">{user.email}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Settings + Logout */}
+          <div className="border-t border-border/20 p-1.5">
+            <button
+              onClick={() => { window.location.href = '/settings' }}
+              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-[12px] text-muted-foreground/70 transition-colors hover:bg-muted/30 hover:text-foreground"
+            >
+              <Settings className="size-3.5" />
+              账号设置
+            </button>
+            <button
+              onClick={handleLogout}
+              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-[12px] text-destructive/70 transition-colors hover:bg-destructive/10 hover:text-destructive"
+            >
+              <LogOut className="size-3.5" />
+              退出登录
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

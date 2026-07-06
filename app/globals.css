@@ -39,7 +39,7 @@
 }
 
 .dark {
-  --background: oklch(0.13 0 0);
+  --background: #141414;
   --foreground: oklch(0.95 0 0);
   --card: #262626;
   --card-foreground: oklch(0.95 0 0);
@@ -137,7 +137,7 @@
   background:
     radial-gradient(circle at 24% 16%, oklch(0.50 0.08 245 / 0.06), transparent 36rem),
     radial-gradient(circle at 80% 76%, oklch(0.44 0.07 190 / 0.05), transparent 34rem),
-    linear-gradient(135deg, oklch(0.115 0.004 250), oklch(0.13 0.006 250) 52%, oklch(0.105 0.004 250));
+    #141414;
 }
 
 .canvas-tech-grid::before {

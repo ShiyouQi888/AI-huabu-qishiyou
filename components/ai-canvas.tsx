@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ReactFlow,
   Background,
@@ -8,27 +8,36 @@ import {
   ReactFlowProvider,
   ConnectionMode,
   ConnectionLineType,
+  SelectionMode,
   Node,
   Edge,
   useReactFlow,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import {
+  Boxes,
   CheckCircle2,
   Copy,
+  FileText,
+  Film,
+  ImageIcon,
   Moon,
+  Plus,
   Redo2,
   RotateCcw,
   Route,
   Scissors,
+  Sparkles,
   Sun,
   Trash2,
   Undo2,
+  Unlink,
   Workflow,
 } from 'lucide-react'
 import { useTheme } from 'next-themes'
 
-import { CustomNodeData, EdgeStyleType, useFlowStore, NodeType } from '@/lib/store'
+import { CustomNodeData, EdgeStyleType, useFlowStore, NodeType, WorkflowSnapshot } from '@/lib/store'
+import { templates } from '@/lib/templates'
 import ImageNode from './nodes/image-node'
 import VideoNode from './nodes/video-node'
 import TextNode from './nodes/text-node'
@@ -37,7 +46,11 @@ import ScriptNode from './nodes/script-node'
 import SceneNode from './nodes/scene-node'
 import ScreenplayNode from './nodes/screenplay-node'
 import StoryboardNode from './nodes/storyboard-node'
+import EpisodeListNode from './nodes/episode-list-node'
+import GroupNode from './nodes/group-node'
 import PromptAssistantNode from './nodes/prompt-assistant-node'
+import GraphicNode from './nodes/graphic-node'
+import GraphicBriefNode from './nodes/graphic-brief-node'
 import { SidebarToolbar } from './sidebar-toolbar'
 import { ZoomControls } from './zoom-controls'
 import { CanvasMenuPanel, CanvasMenuPanelType } from './canvas-menu-panel'
@@ -54,8 +67,12 @@ const nodeTypes = {
   scriptNode: ScriptNode,
   sceneNode: SceneNode,
   storyboardNode: StoryboardNode,
+  episodeListNode: EpisodeListNode,
+  groupNode: GroupNode,
   screenplayNode: ScreenplayNode,
   promptAssistantNode: PromptAssistantNode,
+  graphicNode: GraphicNode,
+  graphicBriefNode: GraphicBriefNode,
 }
 
 const edgeTypes = {
@@ -70,6 +87,9 @@ function Flow() {
   const [selectedEdges, setSelectedEdges] = useState<Edge[]>([])
   const [isThemeMounted, setIsThemeMounted] = useState(false)
   const [activePanel, setActivePanel] = useState<CanvasMenuPanelType | null>(null)
+  const [ctxMenu, setCtxMenu] = useState<
+    { x: number; y: number; kind: 'selection' | 'group' | 'node'; ids: string[]; groupId?: string } | null
+  >(null)
   const { theme, setTheme } = useTheme()
   const {
     nodes,
@@ -83,6 +103,12 @@ function Flow() {
     addNode,
     deleteNode,
     duplicateNode,
+    groupNodes,
+    ungroupNodes,
+    deleteGroupAndChildren,
+    assignNodeToGroup,
+    removeNodeFromGroup,
+    setDragOverGroupId,
     resetCanvas,
     undo,
     redo,
@@ -90,7 +116,8 @@ function Flow() {
     materialPickerTarget,
     closeMaterialPicker,
   } = useFlowStore()
-  const { screenToFlowPosition, fitView } = useReactFlow()
+  const { screenToFlowPosition, fitView, getIntersectingNodes } = useReactFlow()
+  const dragOverRef = useRef<string | null>(null)
 
   useEffect(() => { setIsThemeMounted(true) }, [])
 
@@ -185,11 +212,28 @@ function Flow() {
         : {}
 
       if (materialPickerTarget) {
-        updateNodeData(materialPickerTarget, {
-          status: material.url ? 'ready' : 'idle',
-          meta: material.meta,
-          ...mediaData,
-        })
+        const sbMatch = materialPickerTarget.match(/^(.+):(scene|char|prop):(\d+)$/)
+        if (sbMatch) {
+          const [, sbNodeId, field, rowIdx] = sbMatch
+          const sbNode = useFlowStore.getState().nodes.find((n) => n.id === sbNodeId)
+          if (sbNode && material.url) {
+            try {
+              const rows = JSON.parse(sbNode.data.content || '[]')
+              const i = Number(rowIdx)
+              if (rows[i]) {
+                const key = field === 'scene' ? 'sceneImages' : field === 'char' ? 'characterImages' : 'propImages'
+                rows[i][key] = [...(rows[i][key] ?? []), material.url]
+                updateNodeData(sbNodeId, { content: JSON.stringify(rows) })
+              }
+            } catch { /* ignore parse errors */ }
+          }
+        } else {
+          updateNodeData(materialPickerTarget, {
+            status: material.url ? 'ready' : 'idle',
+            meta: material.meta,
+            ...mediaData,
+          })
+        }
         closeMaterialPicker()
       } else {
         const position = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
@@ -230,6 +274,38 @@ function Flow() {
     selectedNodes.forEach((n) => duplicateNode(n.id))
   }, [duplicateNode, selectedNodes])
 
+  const handleGroupSelected = useCallback(() => {
+    const groupable = selectedNodes.filter((n) => n.type !== 'groupNode' && !n.parentId)
+    if (groupable.length < 2) return
+    groupNodes(groupable.map((n) => n.id))
+    setSelectedNodes([])
+  }, [groupNodes, selectedNodes])
+
+  // Highlight the group a node is being dragged over (drag-into-container feedback)
+  const onNodeDrag = useCallback((_e: React.MouseEvent, node: Node<CustomNodeData>) => {
+    if (node.type === 'groupNode') return
+    const target = getIntersectingNodes(node).find((n) => n.type === 'groupNode' && n.id !== node.parentId)
+    const id = target?.id ?? null
+    if (dragOverRef.current !== id) {
+      dragOverRef.current = id
+      setDragOverGroupId(id)
+    }
+  }, [getIntersectingNodes, setDragOverGroupId])
+
+  // Drop a node into a group (or out of one) on drag end
+  const onNodeDragStop = useCallback((_e: React.MouseEvent, node: Node<CustomNodeData>) => {
+    dragOverRef.current = null
+    if (node.type === 'groupNode') { setDragOverGroupId(null); return }
+    const target = getIntersectingNodes(node).find((n) => n.type === 'groupNode')
+    if (target && node.parentId !== target.id) {
+      assignNodeToGroup(node.id, target.id)
+    } else if (!target && node.parentId) {
+      removeNodeFromGroup(node.id)
+    } else {
+      setDragOverGroupId(null)
+    }
+  }, [getIntersectingNodes, assignNodeToGroup, removeNodeFromGroup, setDragOverGroupId])
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const isTyping =
@@ -251,6 +327,10 @@ function Flow() {
         e.preventDefault()
         handleDuplicateSelected()
       }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'g' && selectedNodes.length > 1) {
+        e.preventDefault()
+        handleGroupSelected()
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === '0') {
         e.preventDefault()
         fitView({ duration: 300, padding: 0.18 })
@@ -266,7 +346,7 @@ function Flow() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [fitView, handleDeleteSelected, handleDuplicateSelected, handleCutSelectedEdges, selectedNodes.length, selectedEdges.length, undo, redo])
+  }, [fitView, handleDeleteSelected, handleDuplicateSelected, handleGroupSelected, handleCutSelectedEdges, selectedNodes.length, selectedEdges.length, undo, redo])
 
   const hasSelection = selectedNodes.length > 0
   const sidebarCollapsed = useProjectStore((s) => s.sidebarCollapsed)
@@ -288,11 +368,38 @@ function Flow() {
         onSelectionChange={({ nodes: sel, edges: selEdges }) => {
           setSelectedNodes(sel as Node<CustomNodeData>[])
           setSelectedEdges(selEdges)
-        }}        nodeTypes={nodeTypes}
+        }}
+        onSelectionContextMenu={(e, sel) => {
+          e.preventDefault()
+          setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'selection', ids: sel.map((n) => n.id) })
+        }}
+        onNodeContextMenu={(e, node) => {
+          e.preventDefault()
+          if (node.type === 'groupNode') {
+            setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'group', ids: [node.id], groupId: node.id })
+            return
+          }
+          const selIds = selectedNodes.map((n) => n.id)
+          if (selIds.length > 1 && selIds.includes(node.id)) {
+            setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'selection', ids: selIds })
+          } else {
+            setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'node', ids: [node.id] })
+          }
+        }}
+        onPaneContextMenu={(e) => { e.preventDefault(); setCtxMenu(null) }}
+        onPaneClick={() => setCtxMenu(null)}
+        onMoveStart={() => setCtxMenu(null)}
+        onNodeDrag={onNodeDrag}
+        onNodeDragStop={onNodeDragStop}
+        nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         fitView
         snapToGrid
         snapGrid={[16, 16]}
+        panOnDrag
+        selectionOnDrag={false}
+        selectionKeyCode={['Control', 'Meta']}
+        selectionMode={SelectionMode.Partial}
         defaultEdgeOptions={{
           type: 'default',
           style: edgeLineStyle,
@@ -313,6 +420,7 @@ function Flow() {
           color="var(--canvas-grid-dot)"
         />
       </ReactFlow>
+      {nodes.length === 0 && <EmptyCanvasGallery sidebarWidth={sidebarWidth} />}
       </div>
 
       {/* ── Top Bar ── */}
@@ -381,6 +489,14 @@ function Flow() {
           <div className="h-5 w-px bg-border/50" />
 
           <TopBarBtn
+            onClick={handleGroupSelected}
+            disabled={selectedNodes.length < 2}
+            title="打组选中节点 (Ctrl/⌘+G)"
+          >
+            <Boxes className="size-4" />
+          </TopBarBtn>
+
+          <TopBarBtn
             onClick={handleDuplicateSelected}
             disabled={!hasSelection}
             title="复制选中节点 (Ctrl/⌘+D)"
@@ -408,6 +524,7 @@ function Flow() {
           >
             <RotateCcw className="size-4" />
           </TopBarBtn>
+
         </div>
       </div>
 
@@ -419,6 +536,59 @@ function Flow() {
       <CanvasMenuPanel activePanel={activePanel} onClose={() => { setActivePanel(null); if (materialPickerTarget) closeMaterialPicker() }} onAddMaterial={handleAddMaterial} />
       <ZoomControls />
       <CommandPalette />
+
+      {/* ── Right-click context menu (grouping) ── */}
+      {ctxMenu && (
+        <>
+          <div
+            className="fixed inset-0 z-[59]"
+            onClick={() => setCtxMenu(null)}
+            onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null) }}
+          />
+          <div
+            className="glass fixed z-[60] min-w-[184px] rounded-xl border border-border/60 p-1 shadow-2xl animate-in fade-in zoom-in-95 duration-100"
+            style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          >
+            {ctxMenu.kind === 'selection' && (
+              <CtxItem
+                icon={<Boxes className="size-3.5" />}
+                label={`打组 · ${ctxMenu.ids.length} 个节点`}
+                onClick={() => { groupNodes(ctxMenu.ids); setSelectedNodes([]); setCtxMenu(null) }}
+              />
+            )}
+            {ctxMenu.kind === 'group' ? (
+              <>
+                <CtxItem
+                  icon={<Unlink className="size-3.5" />}
+                  label="解组（保留节点）"
+                  onClick={() => { if (ctxMenu.groupId) ungroupNodes(ctxMenu.groupId); setCtxMenu(null) }}
+                />
+                <CtxItem
+                  icon={<Trash2 className="size-3.5" />}
+                  danger
+                  label="删除分组及节点"
+                  onClick={() => { if (ctxMenu.groupId) deleteGroupAndChildren(ctxMenu.groupId); setCtxMenu(null) }}
+                />
+              </>
+            ) : (
+              <>
+                {ctxMenu.kind === 'selection' && <div className="my-1 h-px bg-border/50" />}
+                <CtxItem
+                  icon={<Copy className="size-3.5" />}
+                  label="复制"
+                  onClick={() => { ctxMenu.ids.forEach((nid) => duplicateNode(nid)); setCtxMenu(null) }}
+                />
+                <CtxItem
+                  icon={<Trash2 className="size-3.5" />}
+                  danger
+                  label="删除"
+                  onClick={() => { ctxMenu.ids.forEach((nid) => deleteNode(nid)); setSelectedNodes([]); setCtxMenu(null) }}
+                />
+              </>
+            )}
+          </div>
+        </>
+      )}
 
       {/* ── Edge cut button — shown when edge(s) selected ── */}
       {selectedEdges.length > 0 && (
@@ -439,6 +609,72 @@ function Flow() {
         </div>
       )}
 
+    </div>
+  )
+}
+
+const templateIconMap: Record<string, typeof Film> = {
+  film: Film,
+  sparkles: Sparkles,
+  'user-circle': ImageIcon,
+  clapperboard: Film,
+  type: FileText,
+  'image-plus': ImageIcon,
+}
+
+function EmptyCanvasGallery({ sidebarWidth }: { sidebarWidth: number }) {
+  const loadCanvas = useFlowStore((s) => s.loadCanvas)
+  const { fitView } = useReactFlow()
+
+  const handleUse = (snapshot: WorkflowSnapshot) => {
+    loadCanvas(snapshot)
+    requestAnimationFrame(() => fitView({ duration: 300, padding: 0.2 }))
+  }
+
+  return (
+    <div
+      className="pointer-events-auto absolute inset-0 z-10 flex items-center justify-center overflow-y-auto"
+    >
+      <div className="w-full max-w-3xl px-8 py-16">
+        <div className="mb-8 text-center">
+          <h2 className="text-xl font-bold text-foreground">选择模板开始创作</h2>
+          <p className="mt-2 text-sm text-muted-foreground">选择一个工作流模板快速开始，或创建空白画布自由搭建</p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          {templates.map((tpl) => {
+            const Icon = templateIconMap[tpl.icon] ?? Workflow
+            return (
+              <button
+                key={tpl.id}
+                onClick={() => handleUse(tpl.snapshot)}
+                className="group w-full rounded-2xl border border-border/40 bg-background/60 p-4 text-left backdrop-blur-sm transition-all hover:border-primary/40 hover:bg-primary/5 hover:shadow-lg hover:shadow-primary/5"
+              >
+                <div className="flex gap-3">
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary transition-colors group-hover:bg-primary/20">
+                    <Icon className="size-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-[13px] font-semibold text-foreground">{tpl.title}</h3>
+                    <p className="mt-0.5 text-[12px] text-muted-foreground">{tpl.subtitle}</p>
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {tpl.tags.map((tag) => (
+                        <span key={tag} className="rounded-md bg-muted/50 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="mt-4 text-center">
+          <p className="text-[11px] text-muted-foreground/40">也可以通过左侧工具栏添加节点，自由搭建工作流</p>
+        </div>
+      </div>
     </div>
   )
 }
@@ -470,6 +706,30 @@ function TopBarBtn({
       `}
     >
       {children}
+    </button>
+  )
+}
+
+function CtxItem({
+  icon,
+  label,
+  onClick,
+  danger,
+}: {
+  icon: React.ReactNode
+  label: string
+  onClick: () => void
+  danger?: boolean
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors ${
+        danger ? 'text-destructive hover:bg-destructive/10' : 'text-foreground/80 hover:bg-muted/60 hover:text-foreground'
+      }`}
+    >
+      <span className={danger ? 'text-destructive' : 'text-muted-foreground'}>{icon}</span>
+      {label}
     </button>
   )
 }

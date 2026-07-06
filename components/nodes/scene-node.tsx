@@ -100,6 +100,7 @@ function SceneNode({ id, data, selected }: SceneNodeProps) {
 
   return (
     <NodeBase
+      nodeId={id}
       nodeType="scene"
       label={data.label}
       status={data.status}

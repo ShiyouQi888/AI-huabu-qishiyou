@@ -68,7 +68,7 @@ function VideoSynthesisNode({ id, data, selected }: VideoSynthesisNodeProps) {
 
   return (
     <NodeBase
-
+      nodeId={id}
       nodeType="videoSynthesis"
       label={data.label}
       status={data.status}

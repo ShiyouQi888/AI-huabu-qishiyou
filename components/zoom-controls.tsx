@@ -1,12 +1,14 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Maximize2, Minus, Plus, Users, Eye } from 'lucide-react'
+import { Maximize2, Minus, Plus, Users, Eye, HelpCircle } from 'lucide-react'
 import { useReactFlow, useOnViewportChange } from '@xyflow/react'
+import { HelpDialog } from './help-dialog'
 
 export function ZoomControls() {
   const { zoomIn, zoomOut, fitView, getZoom } = useReactFlow()
   const [zoom, setZoom] = useState(100)
+  const [helpOpen, setHelpOpen] = useState(false)
 
   const syncZoom = useCallback(() => {
     setZoom(Math.round(getZoom() * 100))
@@ -15,8 +17,25 @@ export function ZoomControls() {
   useOnViewportChange({ onEnd: syncZoom })
   useEffect(() => { syncZoom() }, [syncZoom])
 
+  // "?" or F1 opens help (ignored while typing)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target
+      const typing =
+        t instanceof HTMLInputElement ||
+        t instanceof HTMLTextAreaElement ||
+        (t instanceof HTMLElement && t.isContentEditable)
+      if (typing) return
+      if (e.key === '?' || e.key === 'F1') { e.preventDefault(); setHelpOpen(true) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   return (
     <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2">
+      <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
+
       {/* Secondary actions */}
       <div className="glass flex items-center gap-0.5 rounded-2xl p-1.5 shadow-lg">
         <ZBtn onClick={() => fitView({ duration: 300, padding: 0.15 })} title="适应画布 (Ctrl+0)">
@@ -27,6 +46,9 @@ export function ZoomControls() {
         </ZBtn>
         <ZBtn title="预览模式">
           <Eye className="size-3.5" />
+        </ZBtn>
+        <ZBtn onClick={() => setHelpOpen(true)} title="帮助 (?)">
+          <HelpCircle className="size-3.5" />
         </ZBtn>
       </div>
 

@@ -1,9 +1,9 @@
 'use client'
 
-import { ReactNode, forwardRef } from 'react'
+import { ReactNode, forwardRef, useState, useRef, useEffect } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { X } from 'lucide-react'
-import { NodeType } from '@/lib/store'
+import { NodeType, useFlowStore } from '@/lib/store'
 
 const statusLabel: Record<string, string> = {
   idle:       '待输入',
@@ -35,7 +35,14 @@ interface OutputPort {
   top?: string
 }
 
+interface LeftHandle {
+  id: string
+  top: string
+  color?: string
+}
+
 interface NodeBaseProps {
+  nodeId: string
   nodeType: NodeType
   label: string
   status?: string
@@ -47,6 +54,7 @@ interface NodeBaseProps {
   hasOutput?: boolean
   inputPorts?: InputPort[]
   outputPorts?: OutputPort[]
+  leftHandles?: LeftHandle[]
   children: ReactNode
   footer?: ReactNode
   width?: string
@@ -55,6 +63,7 @@ interface NodeBaseProps {
 }
 
 export const NodeBase = forwardRef<HTMLDivElement, NodeBaseProps>(function NodeBase({
+  nodeId,
   label,
   status = 'idle',
   selected,
@@ -65,12 +74,44 @@ export const NodeBase = forwardRef<HTMLDivElement, NodeBaseProps>(function NodeB
   hasOutput = true,
   inputPorts,
   outputPorts,
+  leftHandles,
   children,
   footer,
   width = 'w-[320px]',
   widthPx,
   noPadding = false,
 }: NodeBaseProps, ref) {
+  const updateNodeData = useFlowStore((s) => s.updateNodeData)
+  const [editing, setEditing] = useState(false)
+  const [editValue, setEditValue] = useState(label)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus()
+      inputRef.current.select()
+    }
+  }, [editing])
+
+  const startEdit = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setEditValue(label)
+    setEditing(true)
+  }
+
+  const commitEdit = () => {
+    const trimmed = editValue.trim()
+    if (trimmed && trimmed !== label) {
+      updateNodeData(nodeId, { label: trimmed })
+    }
+    setEditing(false)
+  }
+
+  const cancelEdit = () => {
+    setEditValue(label)
+    setEditing(false)
+  }
+
   return (
     <div ref={ref} className={`relative ${widthPx ? '' : width}`} style={widthPx ? { width: widthPx } : undefined}>
       <div
@@ -80,10 +121,34 @@ export const NodeBase = forwardRef<HTMLDivElement, NodeBaseProps>(function NodeB
           ${selected ? 'node-selected-ring border-transparent' : 'border-border/60 shadow-black/20'}
         `}
       >
-        {/* Header — never scaled */}
+        {/* Header */}
         <div className="flex items-center gap-2 px-3.5 py-2.5">
           <span className="text-muted-foreground">{icon}</span>
-          <span className="flex-1 truncate text-[15px] font-bold text-foreground">{label}</span>
+
+          {editing ? (
+            <input
+              ref={inputRef}
+              className="nodrag flex-1 min-w-0 bg-transparent text-[15px] font-bold text-foreground outline-none border-b border-primary/60 pb-px"
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onBlur={commitEdit}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); commitEdit() }
+                if (e.key === 'Escape') { e.preventDefault(); cancelEdit() }
+                e.stopPropagation()
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <span
+              className="flex-1 truncate text-[15px] font-bold text-foreground cursor-text select-none"
+              onDoubleClick={startEdit}
+              title="双击编辑名称"
+            >
+              {label}
+            </span>
+          )}
+
           {badge}
           <span className={`shrink-0 rounded-md px-2 py-0.5 text-[13px] font-medium ${statusColor[status] ?? statusColor.idle}`}>
             {statusLabel[status] ?? status}
@@ -173,6 +238,18 @@ export const NodeBase = forwardRef<HTMLDivElement, NodeBaseProps>(function NodeB
           />
         )
       )}
+
+      {/* Extra left handles */}
+      {leftHandles?.map((h) => (
+        <Handle
+          key={h.id}
+          id={h.id}
+          type="target"
+          position={Position.Left}
+          className={`${h.color ?? '!bg-primary !border-background !border-2'} !z-30`}
+          style={{ top: h.top }}
+        />
+      ))}
     </div>
   )
 })

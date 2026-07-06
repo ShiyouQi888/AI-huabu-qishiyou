@@ -180,7 +180,7 @@ function TextNode({ id, data, selected }: TextNodeProps) {
 
   return (
     <NodeBase
-
+      nodeId={id}
       nodeType="text"
       label={data.label}
       status={data.status}

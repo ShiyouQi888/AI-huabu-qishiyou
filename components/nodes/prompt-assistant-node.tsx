@@ -188,7 +188,7 @@ function PromptAssistantNode({ id, data, selected }: PromptAssistantNodeProps) {
 
   return (
     <NodeBase
-
+      nodeId={id}
       nodeType="promptAssistant"
       label={data.label}
       status={data.status}

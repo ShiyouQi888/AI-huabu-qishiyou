@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils'
 import { useModels } from '@/hooks/use-models'
 import { useConnectedPrompt } from '@/hooks/use-connected-prompt'
 import { saveToLibrary, extractVideoThumbnail } from '@/lib/save-to-library'
+import { getStoryboardRowData, type NamedAsset } from '@/lib/storyboard-utils'
 
 
 type Tab = 'prompt' | 'text2video' | 'ref' | 'firstlast' | 'extend'
@@ -87,7 +88,7 @@ function VideoInputNode({ id, data, selected }: VideoNodeProps) {
 
   return (
     <NodeBase
-
+      nodeId={id}
       nodeType="video"
       label={data.label}
       status={data.status}
@@ -132,7 +133,7 @@ function VideoInputNode({ id, data, selected }: VideoNodeProps) {
               title="清除">
               <X className="size-3.5" />
             </button>
-            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 px-2 py-2">
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 px-2 py-2">
               <p className="truncate text-[13px] text-white/90">
                 {naturalSize ? `${naturalSize.w}×${naturalSize.h}` : ''}{data.meta ? ` · ${data.meta as string}` : ''}
               </p>
@@ -176,7 +177,7 @@ function VideoResultNode({ id, data, selected }: VideoNodeProps) {
 
   return (
     <NodeBase
-
+      nodeId={id}
       nodeType="video"
       label={data.label}
       status={data.status}
@@ -212,6 +213,109 @@ function VideoResultNode({ id, data, selected }: VideoNodeProps) {
   )
 }
 
+// ─── RefPromptView: rich display for storyboard-connected prompt ─────────────
+function RefPromptView({
+  text,
+  namedAssets,
+  sourceLabel,
+  shotType,
+  camera,
+  onOpenPicker,
+  onDisconnect,
+}: {
+  text: string
+  namedAssets: NamedAsset[]
+  sourceLabel: string
+  shotType?: string
+  camera?: string
+  onOpenPicker: (nodeId: string) => void
+  onDisconnect: () => void
+}) {
+  const assetMap = useMemo(() => new Map(namedAssets.map((a) => [a.name, a])), [namedAssets])
+
+  const segments = useMemo(() => {
+    const result: Array<{ kind: 'text'; value: string } | { kind: 'mention'; name: string }> = []
+    let lastIdx = 0
+    const re = /@([一-龥A-Za-z0-9_·]+)/g
+    let m: RegExpExecArray | null
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > lastIdx) result.push({ kind: 'text', value: text.slice(lastIdx, m.index) })
+      result.push({ kind: 'mention', name: m[1] })
+      lastIdx = m.index + m[0].length
+    }
+    if (lastIdx < text.length) result.push({ kind: 'text', value: text.slice(lastIdx) })
+    return result
+  }, [text])
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center justify-between rounded-md bg-amber-500/10 px-2.5 py-1">
+        <span className="flex items-center gap-1 text-[11px] font-medium text-amber-600">
+          <Link2 className="size-3" />
+          来自「{sourceLabel}」
+        </span>
+        <button
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onDisconnect() }}
+          className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+        >
+          <Unlink className="size-2.5" />
+          断开
+        </button>
+      </div>
+      <div className="max-h-[160px] overflow-y-auto rounded-lg border border-border/30 bg-muted/20 px-2.5 py-2 text-[12.5px] leading-[1.75]">
+        {segments.map((seg, i) => {
+          if (seg.kind === 'text') {
+            return <span key={i} className="whitespace-pre-wrap text-foreground/70">{seg.value}</span>
+          }
+          const asset = assetMap.get(seg.name)
+          const hasNode = !!asset?.nodeId
+          const chipCls = !asset
+            ? 'bg-muted/40 border-border/30 text-foreground/50'
+            : asset.type === 'scene'
+              ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25'
+              : asset.type === 'char'
+                ? 'bg-blue-500/15 border-blue-500/30 text-blue-400 hover:bg-blue-500/25'
+                : 'bg-amber-500/15 border-amber-500/30 text-amber-400 hover:bg-amber-500/25'
+          return (
+            <button
+              key={i}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); if (hasNode) onOpenPicker(asset!.nodeId!) }}
+              title={hasNode ? `点击替换 @${seg.name} 的图片` : `@${seg.name}（未关联图片）`}
+              className={cn(
+                'inline-flex items-center gap-0.5 rounded border px-1 py-px text-[11.5px] font-medium leading-5 transition-colors',
+                chipCls,
+                hasNode ? 'cursor-pointer' : 'cursor-default opacity-60',
+              )}
+            >
+              {asset?.url && (
+                <img src={asset.url} alt="" className="size-3.5 shrink-0 rounded-sm object-cover" />
+              )}
+              @{seg.name}
+            </button>
+          )
+        })}
+      </div>
+      {/* 景别 + 运镜参数行 */}
+      {(shotType || camera) && (
+        <div className="flex flex-wrap gap-1">
+          {shotType && (
+            <span className="inline-flex items-center gap-1 rounded-md bg-violet-500/10 border border-violet-500/20 px-1.5 py-0.5 text-[11px] font-medium text-violet-400">
+              景别：{shotType}
+            </span>
+          )}
+          {camera && (
+            <span className="inline-flex items-center gap-1 rounded-md bg-sky-500/10 border border-sky-500/20 px-1.5 py-0.5 text-[11px] font-medium text-sky-400">
+              运镜：{camera}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Tool node ────────────────────────────────────────────────────────────────
 function VideoToolNode({ id, data, selected }: VideoNodeProps) {
   const [tab, setTab] = useState<Tab>('prompt')
@@ -242,6 +346,40 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
       setSelectedModel(videoModels[0].id)
     }
   }, [videoModels, selectedModel])
+
+  // ── 自动从分镜表读取时长
+  const allEdges = useFlowStore((s) => s.edges)
+  const allNodes = useFlowStore((s) => s.nodes)
+  useEffect(() => {
+    const edge = allEdges.find(
+      (e) => e.target === id && (e.targetHandle === PROMPT_HANDLE || e.targetHandle === TAB_HANDLES.ref || e.targetHandle === TAB_HANDLES.firstlast),
+    )
+    if (!edge) return
+    const srcNode = allNodes.find((n) => n.id === edge.source)
+    if (!srcNode) return
+    const sbRow = getStoryboardRowData(srcNode as any, edge.sourceHandle ?? undefined)
+    if (sbRow?.duration) {
+      const secs = parseFloat(sbRow.duration)
+      if (!isNaN(secs) && secs > 0) {
+        setDuration(secs)
+        setDurationMode('manual')
+      }
+    }
+  }, [id, allEdges, allNodes])
+
+  // Named assets from connected storyboard row — drives @mention chip rendering
+  const storyboardRowAssets = useMemo(() => {
+    if (!connectedPrompt) return null
+    const sourceNode = allNodes.find((n) => n.id === connectedPrompt.sourceId)
+    if (!sourceNode || sourceNode.data.type !== 'storyboard') return null
+    const edge = allEdges.find((e) => e.id === connectedPrompt.edgeId)
+    if (!edge) return null
+    return getStoryboardRowData(
+      sourceNode as Node<CustomNodeData>,
+      edge.sourceHandle ?? undefined,
+      allNodes as Node<CustomNodeData>[],
+    )
+  }, [connectedPrompt, allNodes, allEdges])
 
   // ── AI 提示词优化
   const optimizePrompt = async () => {
@@ -275,20 +413,31 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
     }
   }
 
-  // ── @素材引用：收集已连接参考、检测输入、选中插入 ─────────────────────────
+  // ── @素材引用：收集已连接参考（含分镜表场景图/角色图）─────────────────────
   const getConnectedRefs = useCallback(() => {
     const state = useFlowStore.getState()
-    return state.edges
-      .filter((e) => e.target === id && e.targetHandle === TAB_HANDLES.ref)
-      .map((e) => {
-        const src = state.nodes.find((n) => n.id === e.source)
-        if (!src) return null
+    const results: Array<{ id: string; label: string; url: string; type: 'image' | 'video' }> = []
+    const refEdges = state.edges.filter((e) => e.target === id && (e.targetHandle === TAB_HANDLES.ref || e.targetHandle === TAB_HANDLES.firstlast || e.targetHandle === PROMPT_HANDLE))
+    for (const e of refEdges) {
+      const src = state.nodes.find((n) => n.id === e.source)
+      if (!src) continue
+      const sbRow = getStoryboardRowData(src as any, e.sourceHandle ?? undefined)
+      if (sbRow) {
+        const rowLabel = `镜${sbRow.rowIndex + 1}`
+        sbRow.sceneImages.forEach((url, i) => {
+          results.push({ id: `${src.id}:scene:${i}`, label: `${rowLabel}-场景${sbRow.sceneImages.length > 1 ? i + 1 : ''}`, url, type: 'image' })
+        })
+        sbRow.characterImages.forEach((url, i) => {
+          results.push({ id: `${src.id}:char:${i}`, label: `${rowLabel}-角色${sbRow.characterImages.length > 1 ? i + 1 : ''}`, url, type: 'image' })
+        })
+      } else {
         const d = src.data as CustomNodeData
         const url = (d.imageUrl || d.videoUrl) as string | undefined
-        if (!url) return null
-        return { id: src.id, label: d.label, url, type: d.imageUrl ? 'image' as const : 'video' as const }
-      })
-      .filter(Boolean) as Array<{ id: string; label: string; url: string; type: 'image' | 'video' }>
+        if (!url) continue
+        results.push({ id: src.id, label: d.label, url, type: d.imageUrl ? 'image' as const : 'video' as const })
+      }
+    }
+    return results
   }, [id])
 
   const detectMention = useCallback((value: string, cursorPos: number) => {
@@ -396,6 +545,7 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
   const addResultNode = useFlowStore((s) => s.addResultNode)
   const addInputNode = useFlowStore((s) => s.addInputNode)
   const removeEdgesWhere = useFlowStore((s) => s.removeEdgesWhere)
+  const openMaterialPicker = useFlowStore((s) => s.openMaterialPicker)
 
   const handleTabChange = (t: Tab) => {
     setTab(t)
@@ -442,6 +592,11 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
       scene: '参考分镜',
       screenplay: '参考剧本',
       promptAssistant: '参考提示词',
+      storyboard: '参考分镜表',
+      graphic: '参考平面',
+      graphicBrief: '参考创意方案',
+      episodeList: '参考剧集列表',
+      group: '参考分组',
     }
     addInputNode(
       id,
@@ -477,7 +632,10 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
         const src = (state.nodes as Record<string, unknown>[]).find(
           (n: Record<string, unknown>) => n.id === edge.source,
         )
-        return ((src?.data ?? {}) as Record<string, unknown>).imageUrl as string | undefined
+        if (!src) return undefined
+        const sbRow = getStoryboardRowData(src as any, (edge.sourceHandle as string) ?? undefined)
+        if (sbRow?.sceneImage) return sbRow.sceneImage
+        return ((src.data ?? {}) as Record<string, unknown>).imageUrl as string | undefined
       }
 
       // 首尾帧
@@ -510,12 +668,39 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
         '1:1': '1:1', '3:4': '3:4', '9:16': '9:16', 'auto': '16:9',
       }
 
-      // 收集全能参考模式的 @素材引用
-      const connectedRefs = getConnectedRefs()
-      const references = connectedRefs.length > 0 && effectivePrompt.includes('@')
-        ? connectedRefs.filter(r => effectivePrompt.includes(`@${r.label}`))
-            .map(r => ({ label: r.label, url: r.url, type: r.type }))
-        : undefined
+      // 收集全能参考模式的 @素材引用 + 分镜表自动引用
+      let references: Array<{ label: string; url: string; type: 'image' | 'video' }> | undefined
+      if (storyboardRowAssets && storyboardRowAssets.namedAssets.length > 0) {
+        const withImages = storyboardRowAssets.namedAssets.filter((a) => a.url)
+        const assetByName = new Map(withImages.map((a) => [a.name, a]))
+
+        // Extract @mentions in order of appearance in the prompt, then look up assets
+        const mentionMatches = [...effectivePrompt.matchAll(/@([一-龥A-Za-z0-9_·]+)/g)]
+        const mentionedInOrder = mentionMatches
+          .map((m) => assetByName.get(m[1]))
+          .filter((a): a is NamedAsset & { url: string } => !!a?.url)
+          .filter((a, i, arr) => arr.findIndex((x) => x.name === a.name) === i) // dedupe
+
+        const pool = mentionedInOrder.length > 0 ? mentionedInOrder : withImages
+        if (pool.length > 0) {
+          references = pool.map((a) => ({ label: a.name, url: a.url!, type: 'image' as const }))
+        }
+      } else {
+        const connectedRefs = getConnectedRefs()
+        if (connectedRefs.length > 0) {
+          references = connectedRefs.map((r) => ({ label: r.label, url: r.url, type: r.type }))
+        }
+      }
+
+      // Augment prompt with shotType / camera from storyboard row if not already in text
+      let finalPrompt = effectivePrompt
+      if (storyboardRowAssets) {
+        const { shotType: st, camera: cam } = storyboardRowAssets
+        const extras: string[] = []
+        if (st && !effectivePrompt.includes(st)) extras.push(`景别：${st}`)
+        if (cam && !effectivePrompt.includes(cam)) extras.push(`运镜：${cam}`)
+        if (extras.length > 0) finalPrompt = `${effectivePrompt.trimEnd()}\n${extras.join('，')}`
+      }
 
       // POST 提交异步任务
       const submitRes = await fetch('/api/generate/video', {
@@ -523,7 +708,7 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: selectedModel,
-          prompt: effectivePrompt,
+          prompt: finalPrompt,
           duration: durationMode === 'manual' ? duration : undefined,
           resolution: resolution === '720p' ? '720p' : resolution,
           firstFrameImage,
@@ -592,7 +777,7 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
   return (
     <NodeBase
       ref={wrapperRef}
-
+      nodeId={id}
       nodeType="video"
       label={data.label}
       status={data.status}
@@ -674,23 +859,38 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
               <p className="text-[12px] leading-tight text-blue-400">源视频节点已创建，请在左侧上传要延长的视频</p>
             </div>
           )}
-          {connectedPrompt && (
-            <div className="flex items-center justify-between rounded-md bg-amber-500/10 px-2.5 py-1" title="外部提示词已接入，本地输入已锁定">
-              <span className="flex items-center gap-1 text-[11px] font-medium text-amber-600">
-                <Link2 className="size-3" />
-                来自「{connectedPrompt.label}」
-              </span>
-              <button
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => { e.stopPropagation(); setPrompt(connectedPrompt.text); connectedPrompt.disconnect() }}
-                className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-              >
-                <Unlink className="size-2.5" />
-                断开
-              </button>
-            </div>
+          {/* Storyboard row connection: rich @mention chip view */}
+          {connectedPrompt && storyboardRowAssets ? (
+            <RefPromptView
+              text={connectedPrompt.text}
+              namedAssets={storyboardRowAssets.namedAssets}
+              sourceLabel={connectedPrompt.label}
+              shotType={storyboardRowAssets.shotType}
+              camera={storyboardRowAssets.camera}
+              onOpenPicker={openMaterialPicker}
+              onDisconnect={() => { setPrompt(connectedPrompt.text); connectedPrompt.disconnect() }}
+            />
+          ) : (
+            <>
+              {connectedPrompt && (
+                <div className="flex items-center justify-between rounded-md bg-amber-500/10 px-2.5 py-1" title="外部提示词已接入，本地输入已锁定">
+                  <span className="flex items-center gap-1 text-[11px] font-medium text-amber-600">
+                    <Link2 className="size-3" />
+                    来自「{connectedPrompt.label}」
+                  </span>
+                  <button
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => { e.stopPropagation(); setPrompt(connectedPrompt.text); connectedPrompt.disconnect() }}
+                    className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                  >
+                    <Unlink className="size-2.5" />
+                    断开
+                  </button>
+                </div>
+              )}
+            </>
           )}
-          <div className="relative flex-1">
+          <div className={cn('relative flex-1', connectedPrompt && storyboardRowAssets && 'hidden')}>
             <textarea
               ref={promptTextareaRef}
               value={connectedPrompt ? connectedPrompt.text : prompt}

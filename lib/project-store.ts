@@ -5,6 +5,28 @@ import { persist } from 'zustand/middleware'
 import { Node, Edge } from '@xyflow/react'
 import { CustomNodeData, NodeType, useFlowStore } from './store'
 
+// Per-user localStorage isolation
+let _uid: string = typeof window !== 'undefined'
+  ? (localStorage.getItem('ai-canvas-uid') ?? 'anon')
+  : 'anon'
+
+const userStorage = {
+  getItem: (_name: string): unknown => {
+    if (typeof window === 'undefined') return null
+    const raw = localStorage.getItem(`ai-canvas-projects-${_uid}`)
+    if (!raw) return null
+    try { return JSON.parse(raw) } catch { return null }
+  },
+  setItem: (_name: string, value: unknown): void => {
+    if (typeof window === 'undefined') return
+    localStorage.setItem(`ai-canvas-projects-${_uid}`, JSON.stringify(value))
+  },
+  removeItem: (_name: string): void => {
+    if (typeof window === 'undefined') return
+    localStorage.removeItem(`ai-canvas-projects-${_uid}`)
+  },
+}
+
 export interface Project {
   id: string
   name: string
@@ -132,7 +154,29 @@ export const useProjectStore = create<ProjectState>()(
     }),
     {
       name: 'ai-canvas-projects',
+      storage: userStorage,
       version: 1,
     }
   )
 )
+
+export function initStoreForUser(userId: string | null) {
+  const newUid = userId ?? 'anon'
+  if (newUid === _uid) return
+  _uid = newUid
+  if (typeof window !== 'undefined') {
+    if (userId) localStorage.setItem('ai-canvas-uid', userId)
+    else localStorage.removeItem('ai-canvas-uid')
+  }
+  // Clear in-memory state first so stale data from previous user doesn't linger
+  // if the new user has no saved data (rehydrate skips update on null storage)
+  useProjectStore.setState({ projects: [], activeProjectId: null })
+  useFlowStore.getState().resetCanvas()
+  useProjectStore.persist.rehydrate()
+  // Load the newly active project's snapshot into the flow canvas
+  const { activeProjectId, projects } = useProjectStore.getState()
+  const active = projects.find((p) => p.id === activeProjectId)
+  if (active?.snapshot) {
+    useFlowStore.getState().loadCanvas(active.snapshot)
+  }
+}

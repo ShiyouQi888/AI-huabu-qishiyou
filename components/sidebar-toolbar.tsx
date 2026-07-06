@@ -11,12 +11,14 @@ import {
   ImageIcon,
   Video,
   FileCode2,
-  Clapperboard,
+  Table2,
   Upload,
   Image as ImageLibrary,
   Search,
   MessageSquareText,
-  Wand
+  PenTool,
+  Camera,
+  ScrollText,
 } from 'lucide-react'
 import { NodeType, useFlowStore } from '@/lib/store'
 import { useReactFlow } from '@xyflow/react'
@@ -41,7 +43,10 @@ const nodeOptions: {
   { type: 'image',          label: 'AI 生图',    icon: ImageIcon,          color: 'text-blue-400',    bgClass: 'bg-blue-500/10' },
   { type: 'video',          label: 'AI 视频',    icon: Video,              color: 'text-violet-400',  bgClass: 'bg-violet-500/10' },
   { type: 'script',         label: 'AI 编剧',    icon: FileCode2,          color: 'text-orange-400',  bgClass: 'bg-orange-500/10' },
-  { type: 'scene',          label: '分镜',       icon: Clapperboard,       color: 'text-cyan-400',    bgClass: 'bg-cyan-500/10' },
+  { type: 'screenplay',     label: 'AI 剧本',    icon: ScrollText,         color: 'text-pink-400',    bgClass: 'bg-pink-500/10' },
+  { type: 'scene',          label: '场景描述',   icon: Camera,             color: 'text-cyan-400',    bgClass: 'bg-cyan-500/10' },
+  { type: 'storyboard',     label: '分镜表',     icon: Table2,             color: 'text-teal-400',    bgClass: 'bg-teal-500/10' },
+  { type: 'graphic',        label: 'AI 平面',    icon: PenTool,            color: 'text-rose-400',    bgClass: 'bg-rose-500/10' },
   { type: 'promptAssistant', label: '提示词助手', icon: MessageSquareText,  color: 'text-emerald-400', bgClass: 'bg-emerald-500/10' },
 ]
 
@@ -63,6 +68,7 @@ function getNodeTypeFromFile(file: File): NodeType | null {
 export function SidebarToolbar({ onOpenMaterials, activePanel, onOpenPanel }: SidebarToolbarProps) {
   const [showAddMenu, setShowAddMenu] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const addNode = useFlowStore((state) => state.addNode)
@@ -97,7 +103,18 @@ export function SidebarToolbar({ onOpenMaterials, activePanel, onOpenPanel }: Si
       x: window.innerWidth / 2,
       y: window.innerHeight / 2,
     })
-    addNode(type, position)
+    if (type === 'storyboard') {
+      const rows = [1, 2, 3].map((i) => ({
+        sceneIndex: i, description: '', camera: '', dialogue: '',
+        shotType: '', sceneImages: [], characterImages: [], propImages: [],
+      }))
+      addNode(type, position, { content: JSON.stringify(rows), status: 'ready' })
+    } else if (type === 'screenplay') {
+      const emptyScreenplay = JSON.stringify({ title: '未命名剧本', synopsis: '', content: '' })
+      addNode(type, position, { content: emptyScreenplay, status: 'idle' })
+    } else {
+      addNode(type, position)
+    }
     setShowAddMenu(false)
     setSearchQuery('')
   }, [addNode, screenToFlowPosition])
@@ -280,7 +297,11 @@ export function SidebarToolbar({ onOpenMaterials, activePanel, onOpenPanel }: Si
       {/* ── Keyboard shortcut hints ── */}
       <div className="hidden xl:block">
         <div className="glass rounded-full px-4 py-1.5 text-[10px] text-muted-foreground/50">
-          <kbd className="font-mono text-[10px]">N</kbd> 添加  ·  <kbd className="font-mono text-[10px]">Ctrl+Z</kbd> 撤销  ·  <kbd className="font-mono text-[10px]">Del</kbd> 删除
+          <kbd className="font-mono text-[10px]">N</kbd> 添加
+          {'  ·  '}
+          <kbd className="font-mono text-[10px]">{isMac ? '⌘Z' : 'Ctrl+Z'}</kbd> 撤销
+          {'  ·  '}
+          <kbd className="font-mono text-[10px]">Del</kbd> 删除
         </div>
       </div>
     </div>

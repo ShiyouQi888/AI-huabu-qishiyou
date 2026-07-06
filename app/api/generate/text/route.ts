@@ -16,16 +16,36 @@
 import { NextResponse } from 'next/server'
 import { generateText, generateTextStream } from '@/lib/services/ai/index'
 import { AIError } from '@/lib/services/ai/types'
+import { getAuthUser } from '@/lib/auth'
+import { rateLimit } from '@/lib/rate-limit'
 
 export async function POST(request: Request) {
+  // Auth check
+  const user = await getAuthUser()
+  if (!user) return NextResponse.json({ error: '未登录' }, { status: 401 })
+
+  // Rate limit: 60 requests per minute per user
+  const rl = rateLimit(user.id, 'text-gen', { limit: 60, windowMs: 60_000 })
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: `请求过于频繁，请 ${rl.retryAfter} 秒后重试` },
+      { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } },
+    )
+  }
+
   try {
-    const body = await request.json()
+    const body = await request.json() as {
+      model: string
+      prompt: string
+      systemPrompt?: string
+      temperature?: number
+      maxTokens?: number
+      contextTexts?: string[]
+      stream?: boolean
+    }
 
     if (!body.model || !body.prompt) {
-      return NextResponse.json(
-        { error: '缺少必填参数 model / prompt' },
-        { status: 400 },
-      )
+      return NextResponse.json({ error: '缺少必填参数 model / prompt' }, { status: 400 })
     }
 
     const req = {
