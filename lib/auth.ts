@@ -62,6 +62,12 @@ export function getUserByEmail(email: string): SafeUser | null {
   return user ? toSafeUser(user) : null
 }
 
+export function getUserByUsername(username: string): SafeUser | null {
+  const users = readUsers()
+  const user = users.find((u) => u.username === username.trim())
+  return user ? toSafeUser(user) : null
+}
+
 export async function createUser(
   username: string,
   password: string,

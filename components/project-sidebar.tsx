@@ -16,6 +16,9 @@ import {
   Calendar,
   Mail,
   User,
+  Users,
+  Share2,
+  Lock,
   Settings,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -26,12 +29,19 @@ export function ProjectSidebar() {
     projects,
     activeProjectId,
     sidebarCollapsed,
+    scope,
+    teams,
+    userId,
+    loading,
     toggleSidebar,
+    setScope,
     createProject,
     renameProject,
     deleteProject,
     switchProject,
     duplicateProject,
+    convertToTeamProject,
+    updateProjectEditors,
     saveCurrentProject,
   } = useProjectStore()
 
@@ -39,6 +49,23 @@ export function ProjectSidebar() {
   const [renameValue, setRenameValue] = useState('')
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [convertPickId, setConvertPickId] = useState<string | null>(null)
+  const [editorsPickId, setEditorsPickId] = useState<string | null>(null)
+  const [teamMembers, setTeamMembers] = useState<{ userId: string; username: string; role: string }[]>([])
+
+  const isTeamScope = scope !== 'personal'
+
+  const openEditorsPicker = useCallback(async (projectId: string) => {
+    setEditorsPickId(projectId)
+    setConvertPickId(null)
+    try {
+      const res = await fetch(`/api/teams/${scope}`)
+      if (res.ok) {
+        const t = await res.json()
+        setTeamMembers(t.members ?? [])
+      }
+    } catch { /* keep whatever we have */ }
+  }, [scope])
   const renameRef = useRef<HTMLInputElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -56,6 +83,8 @@ export function ProjectSidebar() {
     const handler = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setMenuOpenId(null)
+        setConvertPickId(null)
+        setEditorsPickId(null)
       }
     }
     const id = window.setTimeout(() => document.addEventListener('mousedown', handler), 0)
@@ -97,9 +126,9 @@ export function ProjectSidebar() {
     return () => clearInterval(timer)
   }, [activeProjectId, saveCurrentProject])
 
-  // Auto-save on beforeunload
+  // Auto-save on beforeunload (keepalive lets the request outlive the page)
   useEffect(() => {
-    const handler = () => saveCurrentProject()
+    const handler = () => saveCurrentProject(true)
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
   }, [saveCurrentProject])
@@ -160,6 +189,33 @@ export function ProjectSidebar() {
         </div>
       </div>
 
+      {/* Scope: 个人 / 团队 */}
+      {teams.length > 0 && (
+        <div className="flex items-center gap-1 overflow-x-auto border-b border-border/30 px-2.5 py-2">
+          <button
+            onClick={() => setScope('personal')}
+            className={cn(
+              'flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors',
+              scope === 'personal' ? 'bg-primary text-primary-foreground' : 'bg-muted/40 text-muted-foreground hover:bg-muted/70',
+            )}
+          >
+            <User className="size-3" /> 个人
+          </button>
+          {teams.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setScope(t.id)}
+              className={cn(
+                'flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors',
+                scope === t.id ? 'bg-primary text-primary-foreground' : 'bg-muted/40 text-muted-foreground hover:bg-muted/70',
+              )}
+            >
+              <Users className="size-3" /> {t.name}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* New project button */}
       <div className="px-2.5 pt-2.5">
         <button
@@ -167,19 +223,23 @@ export function ProjectSidebar() {
           className="flex w-full items-center gap-2 rounded-xl border border-dashed border-border/50 px-3 py-2.5 text-[12px] text-muted-foreground transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
         >
           <Plus className="size-3.5" />
-          新建项目
+          {isTeamScope ? '新建团队项目' : '新建项目'}
         </button>
       </div>
 
       {/* Project list */}
       <div className="flex-1 overflow-y-auto px-2.5 pt-2">
-        {projects.length === 0 && (
+        {loading ? (
+          <div className="mt-8 text-center text-[12px] text-muted-foreground/40">加载中…</div>
+        ) : projects.length === 0 ? (
           <div className="mt-8 text-center">
             <FolderOpen className="mx-auto size-8 text-muted-foreground/20" />
-            <p className="mt-2 text-[12px] text-muted-foreground/40">还没有项目</p>
+            <p className="mt-2 text-[12px] text-muted-foreground/40">
+              {isTeamScope ? '该团队还没有项目' : '还没有项目'}
+            </p>
             <p className="mt-0.5 text-[11px] text-muted-foreground/30">点击上方按钮新建</p>
           </div>
-        )}
+        ) : null}
 
         <div className="space-y-1">
           {projects.map((p) => {
@@ -187,6 +247,11 @@ export function ProjectSidebar() {
             const isRenaming = p.id === renamingId
             const isMenuOpen = p.id === menuOpenId
             const isConfirmingDelete = p.id === confirmDeleteId
+            const editors = p.editors?.length ? p.editors : (p.createdBy ? [p.createdBy] : [])
+            const canEdit = scope === 'personal' || editors.length === 0 || (!!userId && editors.includes(userId))
+            const isConvertPick = p.id === convertPickId
+            const isEditorsPick = p.id === editorsPickId
+            const nodeN = p.nodeCount ?? p.snapshot?.nodes.length ?? 0
 
             return (
               <div
@@ -233,6 +298,8 @@ export function ProjectSidebar() {
                         e.stopPropagation()
                         setMenuOpenId(isMenuOpen ? null : p.id)
                         setConfirmDeleteId(null)
+                        setConvertPickId(null)
+                        setEditorsPickId(null)
                       }}
                       className={cn(
                         'flex size-6 shrink-0 items-center justify-center rounded-md transition-all',
@@ -250,8 +317,11 @@ export function ProjectSidebar() {
                 {!isRenaming && (
                   <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground/50">
                     <span>{formatTime(p.updatedAt)}</span>
-                    {p.snapshot && (
-                      <span>{p.snapshot.nodes.length} 节点</span>
+                    {nodeN > 0 && <span>{nodeN} 节点</span>}
+                    {isTeamScope && !canEdit && (
+                      <span className="flex items-center gap-0.5 rounded bg-amber-500/10 px-1 text-amber-500/90">
+                        <Lock className="size-2.5" /> 只读
+                      </span>
                     )}
                   </div>
                 )}
@@ -261,49 +331,141 @@ export function ProjectSidebar() {
                   <div
                     ref={menuRef}
                     onClick={(e) => e.stopPropagation()}
-                    className="absolute right-0 top-full z-50 mt-1 w-[140px] overflow-hidden rounded-xl border border-border/40 bg-popover shadow-xl animate-in fade-in zoom-in-95 duration-100"
+                    className="absolute right-0 top-full z-50 mt-1 w-[160px] overflow-hidden rounded-xl border border-border/40 bg-popover shadow-xl animate-in fade-in zoom-in-95 duration-100"
                   >
-                    <button
-                      onClick={() => startRename(p)}
-                      className="flex w-full items-center gap-2 px-3 py-2 text-[12px] text-foreground/80 transition-colors hover:bg-muted/50"
-                    >
-                      <Pencil className="size-3" />
-                      重命名
-                    </button>
-                    <button
-                      onClick={() => handleDuplicate(p.id)}
-                      className="flex w-full items-center gap-2 px-3 py-2 text-[12px] text-foreground/80 transition-colors hover:bg-muted/50"
-                    >
-                      <Copy className="size-3" />
-                      复制项目
-                    </button>
-                    <div className="mx-2 border-t border-border/30" />
-                    {isConfirmingDelete ? (
-                      <div className="flex items-center justify-between px-3 py-2">
-                        <span className="text-[11px] text-destructive">确认删除？</span>
-                        <div className="flex gap-1">
-                          <button
-                            onClick={() => handleDelete(p.id)}
-                            className="flex size-5 items-center justify-center rounded bg-destructive text-white"
-                          >
-                            <Check className="size-3" />
-                          </button>
-                          <button
-                            onClick={() => setConfirmDeleteId(null)}
-                            className="flex size-5 items-center justify-center rounded bg-muted text-muted-foreground"
-                          >
-                            <X className="size-3" />
-                          </button>
+                    {isEditorsPick ? (
+                      <>
+                        <div className="px-3 py-1.5 text-[10px] font-medium text-muted-foreground">可编辑成员</div>
+                        <div className="max-h-44 overflow-y-auto">
+                          {teamMembers.map((m) => {
+                            const isEd = editors.includes(m.userId)
+                            return (
+                              <div key={m.userId} className="flex items-center gap-2 px-3 py-1.5">
+                                <button
+                                  onClick={() => updateProjectEditors(p.id, isEd ? 'remove' : 'add', m.userId)}
+                                  className={cn(
+                                    'flex size-4 shrink-0 items-center justify-center rounded border transition-colors',
+                                    isEd ? 'border-primary bg-primary text-primary-foreground' : 'border-border/60 hover:border-primary/50',
+                                  )}
+                                  title={isEd ? '取消编辑权' : '设为可编辑'}
+                                >
+                                  {isEd && <Check className="size-2.5" />}
+                                </button>
+                                <span className="min-w-0 flex-1 truncate text-[12px] text-foreground/80">
+                                  {m.username}{m.userId === userId && ' (我)'}
+                                </span>
+                                {!isEd && (
+                                  <button
+                                    onClick={() => updateProjectEditors(p.id, 'transfer', m.userId)}
+                                    className="shrink-0 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+                                    title="转让编辑权（设为唯一可编辑）"
+                                  >
+                                    仅TA
+                                  </button>
+                                )}
+                              </div>
+                            )
+                          })}
+                          {teamMembers.length === 0 && (
+                            <div className="px-3 py-2 text-[11px] text-muted-foreground/50">加载成员中…</div>
+                          )}
                         </div>
-                      </div>
+                        <div className="mx-2 border-t border-border/30" />
+                        <button
+                          onClick={() => setEditorsPickId(null)}
+                          className="flex w-full items-center gap-2 px-3 py-2 text-[12px] text-muted-foreground transition-colors hover:bg-muted/50"
+                        >
+                          <Check className="size-3" />
+                          完成
+                        </button>
+                      </>
+                    ) : isConvertPick ? (
+                      <>
+                        <div className="px-3 py-1.5 text-[10px] font-medium text-muted-foreground">转为哪个团队？</div>
+                        {teams.map((t) => (
+                          <button
+                            key={t.id}
+                            onClick={() => { convertToTeamProject(p.id, t.id); setConvertPickId(null); setMenuOpenId(null) }}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-[12px] text-foreground/80 transition-colors hover:bg-muted/50"
+                          >
+                            <Users className="size-3" />
+                            <span className="truncate">{t.name}</span>
+                          </button>
+                        ))}
+                        <div className="mx-2 border-t border-border/30" />
+                        <button
+                          onClick={() => setConvertPickId(null)}
+                          className="flex w-full items-center gap-2 px-3 py-2 text-[12px] text-muted-foreground transition-colors hover:bg-muted/50"
+                        >
+                          <X className="size-3" />
+                          取消
+                        </button>
+                      </>
                     ) : (
-                      <button
-                        onClick={() => setConfirmDeleteId(p.id)}
-                        className="flex w-full items-center gap-2 px-3 py-2 text-[12px] text-destructive transition-colors hover:bg-destructive/10"
-                      >
-                        <Trash2 className="size-3" />
-                        删除
-                      </button>
+                      <>
+                        {canEdit && (
+                          <button
+                            onClick={() => startRename(p)}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-[12px] text-foreground/80 transition-colors hover:bg-muted/50"
+                          >
+                            <Pencil className="size-3" />
+                            重命名
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleDuplicate(p.id)}
+                          className="flex w-full items-center gap-2 px-3 py-2 text-[12px] text-foreground/80 transition-colors hover:bg-muted/50"
+                        >
+                          <Copy className="size-3" />
+                          复制项目
+                        </button>
+                        {scope === 'personal' && teams.length > 0 && (
+                          <button
+                            onClick={() => setConvertPickId(p.id)}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-[12px] text-foreground/80 transition-colors hover:bg-muted/50"
+                          >
+                            <Share2 className="size-3" />
+                            转为团队项目
+                          </button>
+                        )}
+                        {isTeamScope && canEdit && (
+                          <button
+                            onClick={() => openEditorsPicker(p.id)}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-[12px] text-foreground/80 transition-colors hover:bg-muted/50"
+                          >
+                            <Users className="size-3" />
+                            编辑权限
+                          </button>
+                        )}
+                        {canEdit && <div className="mx-2 border-t border-border/30" />}
+                        {canEdit && (isConfirmingDelete ? (
+                          <div className="flex items-center justify-between px-3 py-2">
+                            <span className="text-[11px] text-destructive">确认删除？</span>
+                            <div className="flex gap-1">
+                              <button
+                                onClick={() => handleDelete(p.id)}
+                                className="flex size-5 items-center justify-center rounded bg-destructive text-white"
+                              >
+                                <Check className="size-3" />
+                              </button>
+                              <button
+                                onClick={() => setConfirmDeleteId(null)}
+                                className="flex size-5 items-center justify-center rounded bg-muted text-muted-foreground"
+                              >
+                                <X className="size-3" />
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setConfirmDeleteId(p.id)}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-[12px] text-destructive transition-colors hover:bg-destructive/10"
+                          >
+                            <Trash2 className="size-3" />
+                            删除
+                          </button>
+                        ))}
+                      </>
                     )}
                   </div>
                 )}

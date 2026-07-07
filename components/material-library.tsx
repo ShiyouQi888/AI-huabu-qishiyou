@@ -3,7 +3,7 @@
 import { useRef, useMemo, useState, useEffect, useCallback } from 'react'
 import {
   AudioLines, ImageIcon, Search, Sparkles, Video, X, Upload,
-  Plus, Trash2, Pencil, Tag, Loader2, MoreVertical, Check,
+  Plus, Trash2, Pencil, Tag, Loader2, MoreVertical, Check, Users, User as UserIcon,
 } from 'lucide-react'
 import { NodeType } from '@/lib/store'
 import { cn } from '@/lib/utils'
@@ -85,6 +85,16 @@ export function MaterialLibraryContent({ onAddMaterial }: {
   const [categories, setCategories] = useState<Category[]>([])
   const [loading, setLoading] = useState(true)
 
+  // Asset scope: 'personal' (own store) or a team id (shared team store)
+  const [scope, setScope] = useState('personal')
+  const [teams, setTeams] = useState<{ id: string; name: string }[]>([])
+  useEffect(() => {
+    fetch('/api/teams')
+      .then((r) => (r.ok ? r.json() : { teams: [] }))
+      .then((d) => setTeams(d.teams ?? []))
+      .catch(() => { /* no teams */ })
+  }, [])
+
   const [activeTab, setActiveTab] = useState('all')
   const [query, setQuery] = useState('')
   const [uploading, setUploading] = useState(0)
@@ -104,16 +114,17 @@ export function MaterialLibraryContent({ onAddMaterial }: {
 
   // ── Fetch ─────────────────────────────────────────
   const fetchAll = useCallback(async () => {
+    setLoading(true)
     try {
-      const res = await fetch('/api/materials')
+      const res = await fetch(`/api/materials?scope=${encodeURIComponent(scope)}`)
       if (!res.ok) throw new Error()
       const data = await res.json()
       setRawMaterials(data.materials || [])
       setCategories(data.categories || [])
-    } catch { /* show empty */ } finally {
+    } catch { setRawMaterials([]); setCategories([]) } finally {
       setLoading(false)
     }
-  }, [])
+  }, [scope])
 
   useEffect(() => { fetchAll() }, [fetchAll])
 
@@ -156,6 +167,7 @@ export function MaterialLibraryContent({ onAddMaterial }: {
         const fd = new FormData()
         fd.append('file', file)
         fd.append('category', activeTab !== 'all' ? activeTab : 'other')
+        fd.append('scope', scope)
         const res = await fetch('/api/materials', { method: 'POST', body: fd })
         if (!res.ok) {
           const body = await res.json().catch(() => ({})) as { error?: string }
@@ -171,7 +183,7 @@ export function MaterialLibraryContent({ onAddMaterial }: {
         setUploading((n) => n - 1)
       }
     }
-  }, [activeTab])
+  }, [activeTab, scope])
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.length) uploadFiles(e.target.files)
@@ -186,14 +198,14 @@ export function MaterialLibraryContent({ onAddMaterial }: {
     await fetch('/api/materials', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, title: title.trim() }),
+      body: JSON.stringify({ id, title: title.trim(), scope }),
     })
   }
 
   const deleteMaterial = async (id: string) => {
     setRawMaterials((prev) => prev.filter((m) => m.id !== id))
     setMenuId(null)
-    await fetch(`/api/materials?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+    await fetch(`/api/materials?id=${encodeURIComponent(id)}&scope=${encodeURIComponent(scope)}`, { method: 'DELETE' })
   }
 
   const changeCategory = async (id: string, category: string) => {
@@ -203,7 +215,7 @@ export function MaterialLibraryContent({ onAddMaterial }: {
     await fetch('/api/materials', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, category }),
+      body: JSON.stringify({ id, category, scope }),
     })
   }
 
@@ -218,7 +230,7 @@ export function MaterialLibraryContent({ onAddMaterial }: {
     await fetch('/api/materials', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'add-category', id, label }),
+      body: JSON.stringify({ action: 'add-category', id, label, scope }),
     })
   }
 
@@ -229,7 +241,7 @@ export function MaterialLibraryContent({ onAddMaterial }: {
     await fetch('/api/materials', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'delete-category', id: catId }),
+      body: JSON.stringify({ action: 'delete-category', id: catId, scope }),
     })
   }
 
@@ -265,7 +277,9 @@ export function MaterialLibraryContent({ onAddMaterial }: {
     <div className="flex h-full flex-col overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border/40 px-5 py-3.5 shrink-0">
-        <h2 className="text-[14px] font-semibold">我的素材</h2>
+        <h2 className="text-[14px] font-semibold">
+          {scope === 'personal' ? '个人素材' : `${teams.find((t) => t.id === scope)?.name ?? '团队'} · 团队素材`}
+        </h2>
         <div className="flex items-center gap-2">
           {uploadError && (
             <span
@@ -299,6 +313,33 @@ export function MaterialLibraryContent({ onAddMaterial }: {
           />
         </div>
       </div>
+
+      {/* Asset scope: 个人 / 团队 */}
+      {teams.length > 0 && (
+        <div className="flex items-center gap-1.5 overflow-x-auto border-b border-border/40 px-5 py-2 shrink-0">
+          <button
+            onClick={() => { setScope('personal'); setActiveTab('all') }}
+            className={cn(
+              'flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium transition-colors',
+              scope === 'personal' ? 'bg-primary text-primary-foreground' : 'bg-muted/40 text-muted-foreground hover:bg-muted/70',
+            )}
+          >
+            <UserIcon className="size-3" /> 个人
+          </button>
+          {teams.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => { setScope(t.id); setActiveTab('all') }}
+              className={cn(
+                'flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium transition-colors',
+                scope === t.id ? 'bg-primary text-primary-foreground' : 'bg-muted/40 text-muted-foreground hover:bg-muted/70',
+              )}
+            >
+              <Users className="size-3" /> {t.name}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Search */}
       <div className="border-b border-border/40 px-5 py-3 shrink-0">

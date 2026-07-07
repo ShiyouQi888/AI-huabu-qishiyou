@@ -4,11 +4,13 @@ import { useState, useEffect, useCallback } from 'react'
 import { Maximize2, Minus, Plus, Users, Eye, HelpCircle } from 'lucide-react'
 import { useReactFlow, useOnViewportChange } from '@xyflow/react'
 import { HelpDialog } from './help-dialog'
+import { TeamDialog } from './team-dialog'
 
 export function ZoomControls() {
   const { zoomIn, zoomOut, fitView, getZoom } = useReactFlow()
   const [zoom, setZoom] = useState(100)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [teamOpen, setTeamOpen] = useState(false)
 
   const syncZoom = useCallback(() => {
     setZoom(Math.round(getZoom() * 100))
@@ -35,13 +37,14 @@ export function ZoomControls() {
   return (
     <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2">
       <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <TeamDialog open={teamOpen} onClose={() => setTeamOpen(false)} />
 
       {/* Secondary actions */}
       <div className="glass flex items-center gap-0.5 rounded-2xl p-1.5 shadow-lg">
         <ZBtn onClick={() => fitView({ duration: 300, padding: 0.15 })} title="适应画布 (Ctrl+0)">
           <Maximize2 className="size-3.5" />
         </ZBtn>
-        <ZBtn title="协作模式">
+        <ZBtn onClick={() => setTeamOpen(true)} title="团队">
           <Users className="size-3.5" />
         </ZBtn>
         <ZBtn title="预览模式">

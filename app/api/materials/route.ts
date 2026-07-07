@@ -4,6 +4,7 @@ import { existsSync } from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
 import { getAuthUser } from '@/lib/auth'
+import { userInTeam, TeamError } from '@/lib/teams'
 
 const DATA_DIR = path.join(process.cwd(), 'data', 'materials')
 const UPLOAD_DIR = path.join(process.cwd(), 'public', 'uploads', 'materials')
@@ -60,17 +61,43 @@ async function loadStore(userId: string): Promise<MaterialStore> {
   }
 }
 
-async function saveStore(userId: string, store: MaterialStore) {
-  const file = await userDataFile(userId)
+async function saveStore(storeId: string, store: MaterialStore) {
+  const file = await userDataFile(storeId)
   await writeFile(file, JSON.stringify(store, null, 2))
 }
 
-export async function GET() {
+/**
+ * Resolve which asset store to read/write:
+ * - 'personal' / empty → the caller's own store (data/materials/{userId}.json)
+ * - a team id           → the team's shared store (data/materials/{teamId}.json),
+ *                         only if the caller is a member (else throws 403).
+ * Any non-'personal' value is validated as a team the user belongs to, so a
+ * client can never point the store at another user's file.
+ */
+async function resolveStoreId(userId: string, scope: string | null | undefined): Promise<string> {
+  if (!scope || scope === 'personal') return userId
+  const ok = await userInTeam(scope, userId)
+  if (!ok) throw new TeamError('你不是该团队成员，无法访问团队资产', 403)
+  return scope
+}
+
+function scopeErrorResponse(e: unknown) {
+  if (e instanceof TeamError) return NextResponse.json({ error: e.message }, { status: e.statusCode })
+  return null
+}
+
+export async function GET(request: Request) {
   const user = await getAuthUser()
   if (!user) return NextResponse.json({ error: '未登录' }, { status: 401 })
 
-  const store = await loadStore(user.id)
-  return NextResponse.json(store)
+  try {
+    const scope = new URL(request.url).searchParams.get('scope')
+    const storeId = await resolveStoreId(user.id, scope)
+    const store = await loadStore(storeId)
+    return NextResponse.json(store)
+  } catch (e) {
+    return scopeErrorResponse(e) ?? NextResponse.json({ error: '加载失败' }, { status: 500 })
+  }
 }
 
 export async function POST(request: Request) {
@@ -90,8 +117,10 @@ export async function POST(request: Request) {
         type?: string
         category?: string
         thumbnail?: string
+        scope?: string
       }
-      const store = await loadStore(user.id)
+      const storeId = await resolveStoreId(user.id, body.scope)
+      const store = await loadStore(storeId)
 
       if (body.action === 'add-category') {
         const { id, label } = body
@@ -100,7 +129,7 @@ export async function POST(request: Request) {
           return NextResponse.json({ error: '分类已存在' }, { status: 409 })
         }
         store.categories.push({ id, label })
-        await saveStore(user.id, store)
+        await saveStore(storeId, store)
         return NextResponse.json({ categories: store.categories })
       }
 
@@ -159,7 +188,7 @@ export async function POST(request: Request) {
           createdAt: new Date().toISOString(),
         }
         store.materials.unshift(material)
-        await saveStore(user.id, store)
+        await saveStore(storeId, store)
         return NextResponse.json(material)
       }
 
@@ -227,7 +256,7 @@ export async function POST(request: Request) {
           createdAt: new Date().toISOString(),
         }
         store.materials.unshift(material)
-        await saveStore(user.id, store)
+        await saveStore(storeId, store)
         return NextResponse.json(material)
       }
 
@@ -235,7 +264,7 @@ export async function POST(request: Request) {
         const { id } = body
         store.categories = store.categories.filter((c) => c.id !== id)
         store.materials.forEach((m) => { if (m.category === id) m.category = 'other' })
-        await saveStore(user.id, store)
+        await saveStore(storeId, store)
         return NextResponse.json({ categories: store.categories })
       }
 
@@ -248,6 +277,7 @@ export async function POST(request: Request) {
     const title = (formData.get('title') as string) || ''
     const category = (formData.get('category') as string) || 'other'
     const thumbnailData = (formData.get('thumbnail') as string) || ''
+    const storeId = await resolveStoreId(user.id, (formData.get('scope') as string) || null)
 
     if (!file || !(file instanceof File)) {
       return NextResponse.json({ error: '请上传文件' }, { status: 400 })
@@ -287,7 +317,7 @@ export async function POST(request: Request) {
     }
     if (!thumbnailUrl && type === 'image') thumbnailUrl = url
 
-    const store = await loadStore(user.id)
+    const store = await loadStore(storeId)
     if (!store.categories.some((c) => c.id === category)) {
       const catLabel = category === 'ai-image' ? 'AI图片' : category === 'ai-video' ? 'AI视频' : category
       store.categories.push({ id: category, label: catLabel })
@@ -306,9 +336,11 @@ export async function POST(request: Request) {
       createdAt: new Date().toISOString(),
     }
     store.materials.unshift(material)
-    await saveStore(user.id, store)
+    await saveStore(storeId, store)
     return NextResponse.json(material)
   } catch (err) {
+    const scoped = scopeErrorResponse(err)
+    if (scoped) return scoped
     const msg = err instanceof Error ? err.message : String(err)
     console.error('Material upload error:', msg)
     return NextResponse.json({ error: `上传失败: ${msg}` }, { status: 500 })
@@ -320,19 +352,22 @@ export async function PATCH(request: Request) {
   if (!user) return NextResponse.json({ error: '未登录' }, { status: 401 })
 
   try {
-    const body = await request.json() as { id: string; title?: string; category?: string }
+    const body = await request.json() as { id: string; title?: string; category?: string; scope?: string }
     const { id, title, category } = body
     if (!id) return NextResponse.json({ error: '缺少素材 ID' }, { status: 400 })
 
-    const store = await loadStore(user.id)
+    const storeId = await resolveStoreId(user.id, body.scope)
+    const store = await loadStore(storeId)
     const material = store.materials.find((m) => m.id === id)
     if (!material) return NextResponse.json({ error: '素材不存在' }, { status: 404 })
 
     if (title !== undefined) material.title = title
     if (category !== undefined) material.category = category
-    await saveStore(user.id, store)
+    await saveStore(storeId, store)
     return NextResponse.json(material)
   } catch (err) {
+    const scoped = scopeErrorResponse(err)
+    if (scoped) return scoped
     console.error('Material update error:', err)
     return NextResponse.json({ error: '更新失败' }, { status: 500 })
   }
@@ -347,7 +382,8 @@ export async function DELETE(request: Request) {
     const id = searchParams.get('id')
     if (!id) return NextResponse.json({ error: '缺少素材 ID' }, { status: 400 })
 
-    const store = await loadStore(user.id)
+    const storeId = await resolveStoreId(user.id, searchParams.get('scope'))
+    const store = await loadStore(storeId)
     const idx = store.materials.findIndex((m) => m.id === id)
     if (idx === -1) return NextResponse.json({ error: '素材不存在' }, { status: 404 })
 
@@ -365,9 +401,11 @@ export async function DELETE(request: Request) {
       } catch { /* already deleted */ }
     }
 
-    await saveStore(user.id, store)
+    await saveStore(storeId, store)
     return NextResponse.json({ ok: true })
   } catch (err) {
+    const scoped = scopeErrorResponse(err)
+    if (scoped) return scoped
     console.error('Material delete error:', err)
     return NextResponse.json({ error: '删除失败' }, { status: 500 })
   }
