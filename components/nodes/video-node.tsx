@@ -21,6 +21,22 @@ type Tab = 'prompt' | 'text2video' | 'ref' | 'firstlast' | 'extend'
 type Ratio = '21:9' | '16:9' | '4:3' | '1:1' | '3:4' | '9:16' | 'auto'
 type Resolution = '480p' | '720p' | '1080p'
 type DurationMode = 'manual' | 'smart'
+type VideoGenerationMeta = {
+  taskId: string
+  provider?: string
+  modelId: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  submittedAt: number
+  completedAt?: number
+  error?: string
+}
+type VideoNodeMeta = {
+  duration?: number
+  ratio?: Ratio
+  resolution?: Resolution
+  modelId?: string
+  generation?: VideoGenerationMeta
+}
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'prompt',     label: '提示词' },
@@ -361,7 +377,7 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
   const initialMeta = useMemo(() => {
     try {
       return data.meta
-        ? JSON.parse(data.meta as string) as { duration?: number; ratio?: Ratio; resolution?: Resolution; modelId?: string }
+        ? JSON.parse(data.meta as string) as VideoNodeMeta
         : {}
     } catch { return {} }
   }, [data.meta])
@@ -706,10 +722,92 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
     )
   }
 
+  const persistVideoMeta = useCallback((patch: Partial<VideoNodeMeta>) => {
+    const base = typeof data.meta === 'string'
+      ? (() => {
+          try { return JSON.parse(data.meta as string) as VideoNodeMeta } catch { return {} }
+        })()
+      : {}
+    updateNodeData(id, {
+      meta: JSON.stringify({
+        ...base,
+        duration,
+        ratio,
+        resolution,
+        modelId: selectedModel || base.modelId,
+        ...patch,
+      }),
+    })
+  }, [data.meta, duration, id, ratio, resolution, selectedModel, updateNodeData])
+
+  const pollVideoTask = useCallback(async (
+    taskId: string,
+    provider: string | undefined,
+    generation: VideoGenerationMeta,
+  ) => {
+    let attempts = 0
+    const maxAttempts = 120
+
+    const poll = async (): Promise<string | undefined> => {
+      const params = new URLSearchParams({ taskId })
+      if (provider) params.set('provider', provider)
+      const pollRes = await fetch(`/api/generate/video?${params.toString()}`)
+      if (!pollRes.ok) throw new Error(`轮询失败 HTTP ${pollRes.status}`)
+      const result = await pollRes.json() as { status: string; videoUrl?: string }
+      if (result.status === 'failed') throw new Error('视频生成任务失败')
+      if (result.status === 'completed') return result.videoUrl
+      if (++attempts >= maxAttempts) throw new Error('视频生成超时')
+      persistVideoMeta({ generation: { ...generation, status: result.status === 'running' ? 'running' : 'pending' } })
+      await new Promise((r) => setTimeout(r, 5000))
+      return poll()
+    }
+
+    const videoUrl = await poll()
+    if (!videoUrl) throw new Error('生成未返回视频地址')
+
+    const metaStr = `${resolution} · ${ratio} · ${durationMode === 'smart' ? '智能时长' : duration + 's'}`
+    updateNodeData(id, { status: 'completed', videoUrl })
+    persistVideoMeta({ generation: { ...generation, status: 'completed', completedAt: Date.now() } })
+
+    for (let i = 0; i < genCount; i++) {
+      setTimeout(() => {
+        addResultNode(id, 'video', {
+          videoUrl,
+          status: 'completed',
+          meta: metaStr,
+          mode: 'result',
+        })
+      }, i * 150)
+    }
+
+    extractVideoThumbnail(videoUrl).then((thumb) => {
+      saveToLibrary({ url: videoUrl, title: `${data.label} · ${metaStr}`, type: 'video', thumbnail: thumb })
+    })
+  }, [addResultNode, data.label, duration, durationMode, genCount, id, persistVideoMeta, ratio, resolution, updateNodeData])
+
+  useEffect(() => {
+    const generation = initialMeta.generation
+    if (!generation?.taskId || data.status !== 'generating' || isGenerating) return
+    let cancelled = false
+    setIsGenerating(true)
+    pollVideoTask(generation.taskId, generation.provider, generation)
+      .catch((err) => {
+        if (cancelled) return
+        const message = err instanceof Error ? err.message : '未知错误'
+        updateNodeData(id, { status: 'failed' })
+        persistVideoMeta({ generation: { ...generation, status: 'failed', error: message } })
+      })
+      .finally(() => {
+        if (!cancelled) setIsGenerating(false)
+      })
+    return () => { cancelled = true }
+  }, [data.status, id, initialMeta.generation, isGenerating, persistVideoMeta, pollVideoTask, updateNodeData])
+
   const handleGenerate = async () => {
     if (!selectedModel || !effectivePrompt.trim()) return
     setIsGenerating(true)
     updateNodeData(id, { status: 'generating' })
+    let submittedGeneration: VideoGenerationMeta | undefined
     try {
       // 从 store 收集首帧/尾帧/参考图 URL（扫描所有 handle，不限当前 tab）
       const state = useFlowStore.getState()
@@ -822,53 +920,36 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
         const err = await submitRes.json().catch(() => ({}))
         throw new Error(err.error || `HTTP ${submitRes.status}`)
       }
-      const { taskId } = await submitRes.json() as { taskId: string }
-
-      // 轮询任务状态
-      let attempts = 0
-      const maxAttempts = 120  // 最多等 10 分钟（5s 间隔）
-      const poll = async (): Promise<string | undefined> => {
-        const pollRes = await fetch(`/api/generate/video?taskId=${encodeURIComponent(taskId)}`)
-        if (!pollRes.ok) throw new Error(`轮询失败 HTTP ${pollRes.status}`)
-        const result = await pollRes.json() as {
-          status: string; videoUrl?: string
-        }
-        if (result.status === 'completed' || result.status === 'failed') {
-          return result.videoUrl
-        }
-        if (++attempts >= maxAttempts) throw new Error('视频生成超时')
-        await new Promise((r) => setTimeout(r, 5000))
-        return poll()
+      const { taskId, provider } = await submitRes.json() as { taskId: string; provider?: string }
+      const generation: VideoGenerationMeta = {
+        taskId,
+        provider,
+        modelId: selectedModel,
+        status: 'pending',
+        submittedAt: Date.now(),
       }
-
+      submittedGeneration = generation
       updateNodeData(id, {
         status: 'generating',
-        meta: `${resolution} · ${ratioMap[ratio]} · ${durationMode === 'smart' ? '智能时长' : duration + 's'} · 提交成功，等待视频…`,
       })
-      const videoUrl = await poll()
-
-      if (!videoUrl) throw new Error('生成未返回视频地址')
-
-      const metaStr = `${resolution} · ${ratioMap[ratio]} · ${durationMode === 'smart' ? '智能时长' : duration + 's'}`
-      updateNodeData(id, { status: 'completed', videoUrl })
-
-      for (let i = 0; i < genCount; i++) {
-        setTimeout(() => {
-          addResultNode(id, 'video', {
-            videoUrl,
-            status: 'completed',
-            meta: metaStr,
-            mode: 'result',
-          })
-        }, i * 150)
-      }
-
-      extractVideoThumbnail(videoUrl).then((thumb) => {
-        saveToLibrary({ url: videoUrl, title: `${data.label} · ${metaStr}`, type: 'video', thumbnail: thumb })
+      persistVideoMeta({
+        duration: durationMode === 'manual' ? duration : undefined,
+        ratio,
+        resolution,
+        modelId: selectedModel,
+        generation,
       })
+      await pollVideoTask(taskId, provider, generation)
     } catch (err) {
       console.error('视频生成失败:', err)
-      updateNodeData(id, { status: 'failed', meta: String(err instanceof Error ? err.message : '未知错误') })
+      const message = err instanceof Error ? err.message : '未知错误'
+      updateNodeData(id, { status: 'failed' })
+      const failedGeneration = submittedGeneration ?? initialMeta.generation
+      persistVideoMeta({
+        generation: failedGeneration
+          ? { ...failedGeneration, status: 'failed', error: message }
+          : undefined,
+      })
     } finally {
       setIsGenerating(false)
     }

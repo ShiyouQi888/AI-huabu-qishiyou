@@ -19,10 +19,15 @@ import {
   Users,
   Share2,
   Lock,
+  AlertCircle,
+  Cloud,
+  Loader2,
+  Save,
   Settings,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useProjectStore, Project, initStoreForUser } from '@/lib/project-store'
+import { useFlowStore } from '@/lib/store'
 
 export function ProjectSidebar() {
   const {
@@ -33,7 +38,12 @@ export function ProjectSidebar() {
     teams,
     userId,
     loading,
+    saveStatus,
+    hasUnsavedChanges,
+    lastSavedAt,
+    saveError,
     toggleSidebar,
+    markDirty,
     setScope,
     createProject,
     renameProject,
@@ -68,6 +78,7 @@ export function ProjectSidebar() {
   }, [scope])
   const renameRef = useRef<HTMLInputElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const saveTimerRef = useRef<number | null>(null)
 
   // Focus rename input
   useEffect(() => {
@@ -119,7 +130,33 @@ export function ProjectSidebar() {
     setMenuOpenId(null)
   }
 
-  // Auto-save on interval
+  // Track canvas changes and mark the active project dirty.
+  useEffect(() => {
+    return useFlowStore.subscribe((state, prevState) => {
+      if (
+        state.nodes !== prevState.nodes ||
+        state.edges !== prevState.edges ||
+        state.nodeCount !== prevState.nodeCount
+      ) {
+        markDirty()
+      }
+    })
+  }, [markDirty])
+
+  // Debounced auto-save after edits settle.
+  useEffect(() => {
+    if (!activeProjectId || !hasUnsavedChanges || saveStatus === 'saving') return
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = window.setTimeout(() => {
+      saveCurrentProject()
+      saveTimerRef.current = null
+    }, 1800)
+    return () => {
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
+    }
+  }, [activeProjectId, hasUnsavedChanges, saveCurrentProject, saveStatus])
+
+  // Coarse fallback auto-save on interval.
   useEffect(() => {
     if (!activeProjectId) return
     const timer = setInterval(() => saveCurrentProject(), 30_000)
@@ -172,6 +209,13 @@ export function ProjectSidebar() {
           <span className="rounded-full bg-muted/60 px-1.5 text-[10px] text-muted-foreground">{projects.length}</span>
         </div>
         <div className="flex items-center gap-0.5">
+          <SaveStateBadge
+            status={saveStatus}
+            hasUnsavedChanges={hasUnsavedChanges}
+            lastSavedAt={lastSavedAt}
+            error={saveError}
+            onRetry={() => saveCurrentProject()}
+          />
           <button
             onClick={handleCreateProject}
             className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
@@ -478,6 +522,68 @@ export function ProjectSidebar() {
       {/* User profile footer */}
       <UserProfileFooter />
     </div>
+  )
+}
+
+function SaveStateBadge({
+  status,
+  hasUnsavedChanges,
+  lastSavedAt,
+  error,
+  onRetry,
+}: {
+  status: 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
+  hasUnsavedChanges: boolean
+  lastSavedAt: number | null
+  error: string | null
+  onRetry: () => void
+}) {
+  const savedText = lastSavedAt
+    ? new Date(lastSavedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+    : ''
+  const isSaving = status === 'saving'
+  const isError = status === 'error'
+  const isDirty = hasUnsavedChanges || status === 'dirty'
+  const title = isSaving
+    ? '正在保存'
+    : isError
+      ? `保存失败：${error ?? '点击重试'}`
+      : isDirty
+        ? '有未保存修改'
+        : savedText
+          ? `已保存 ${savedText}`
+          : '已保存'
+
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        if (isError || isDirty) onRetry()
+      }}
+      className={cn(
+        'flex size-7 items-center justify-center rounded-lg transition-colors',
+        isError
+          ? 'text-destructive hover:bg-destructive/10'
+          : isSaving
+            ? 'text-primary'
+            : isDirty
+              ? 'text-amber-400 hover:bg-amber-500/10'
+              : 'text-emerald-500/80 hover:bg-emerald-500/10',
+      )}
+      title={title}
+      aria-label={title}
+    >
+      {isError ? (
+        <AlertCircle className="size-3.5" />
+      ) : isSaving ? (
+        <Loader2 className="size-3.5 animate-spin" />
+      ) : isDirty ? (
+        <Save className="size-3.5" />
+      ) : (
+        <Cloud className="size-3.5" />
+      )}
+    </button>
   )
 }
 

@@ -90,10 +90,12 @@ export async function generateVideo(req: VideoGenRequest): Promise<VideoGenRespo
   if (!provider) throw new AIError(`不支持的模型: ${req.model}`, 400)
 
   if (provider === 'volces') {
-    return videoGenSeedance(req)
+    const result = await videoGenSeedance(req)
+    return { ...result, provider }
   }
   if (provider === 'zhipu') {
-    return videoGenCogVideoX(req)
+    const result = await videoGenCogVideoX(req)
+    return { ...result, provider }
   }
 
   throw new AIError(`视频生成暂不支持 ${provider}`, 400, provider)

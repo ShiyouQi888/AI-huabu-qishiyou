@@ -23,6 +23,7 @@ export interface Project {
 }
 
 interface TeamRef { id: string; name: string }
+type SaveStatus = 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
 
 interface ProjectState {
   scope: string                 // 'personal' | teamId
@@ -32,9 +33,14 @@ interface ProjectState {
   activeProjectId: string | null
   activeCanEdit: boolean
   loading: boolean
+  saveStatus: SaveStatus
+  hasUnsavedChanges: boolean
+  lastSavedAt: number | null
+  saveError: string | null
   sidebarCollapsed: boolean
 
   toggleSidebar: () => void
+  markDirty: () => void
   setScope: (scope: string) => Promise<void>
   reload: () => Promise<void>
   createProject: (name?: string) => Promise<string | undefined>
@@ -51,6 +57,9 @@ const flowSnapshot = () => {
   const f = useFlowStore.getState()
   return { nodes: f.nodes, edges: f.edges, nodeCount: f.nodeCount }
 }
+
+let saveInFlight: Promise<void> | null = null
+let saveQueued = false
 
 export const editorsOf = (p: Pick<Project, 'editors' | 'createdBy'>): string[] =>
   p.editors?.length ? p.editors : (p.createdBy ? [p.createdBy] : [])
@@ -122,9 +131,22 @@ export const useProjectStore = create<ProjectState>()(
       activeProjectId: null,
       activeCanEdit: true,
       loading: false,
+      saveStatus: 'idle',
+      hasUnsavedChanges: false,
+      lastSavedAt: null,
+      saveError: null,
       sidebarCollapsed: false,
 
       toggleSidebar: () => set({ sidebarCollapsed: !get().sidebarCollapsed }),
+      markDirty: () => {
+        const { activeProjectId, activeCanEdit, loading, saveStatus } = get()
+        if (!activeProjectId || !activeCanEdit || loading) return
+        set({
+          hasUnsavedChanges: true,
+          saveStatus: saveStatus === 'saving' ? 'saving' : 'dirty',
+          saveError: null,
+        })
+      },
 
       reload: async () => {
         set({ loading: true })
@@ -135,7 +157,7 @@ export const useProjectStore = create<ProjectState>()(
       setScope: async (scope) => {
         if (scope === get().scope) return
         await get().saveCurrentProject()
-        set({ scope, activeProjectId: null, activeCanEdit: true, projects: [], loading: true })
+        set({ scope, activeProjectId: null, activeCanEdit: true, projects: [], loading: true, saveStatus: 'idle', hasUnsavedChanges: false, saveError: null })
         useFlowStore.getState().resetCanvas()
         const { projects } = await apiList(scope)
         set({ projects, loading: false })
@@ -145,17 +167,25 @@ export const useProjectStore = create<ProjectState>()(
         await get().saveCurrentProject()
         const scope = get().scope
         try {
+          set({ loading: true, saveStatus: 'idle', hasUnsavedChanges: false, saveError: null })
           const res = await fetch('/api/projects', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name: name || `项目 ${get().projects.length + 1}`, snapshot: null, scope }),
           })
-          if (!res.ok) return undefined
+          if (!res.ok) {
+            set({ loading: false, saveStatus: 'error', saveError: '新建项目失败' })
+            return undefined
+          }
           const project = (await res.json()) as Project
           set({ projects: [project, ...get().projects], activeProjectId: project.id, activeCanEdit: true })
           useFlowStore.getState().resetCanvas()
+          set({ saveStatus: 'saved', hasUnsavedChanges: false, lastSavedAt: Date.now(), loading: false })
           return project.id
-        } catch { return undefined }
+        } catch {
+          set({ loading: false, saveStatus: 'error', saveError: '新建项目失败' })
+          return undefined
+        }
       },
 
       renameProject: async (id, name) => {
@@ -183,9 +213,13 @@ export const useProjectStore = create<ProjectState>()(
         await get().saveCurrentProject()
         const { scope, projects } = get()
         if (!projects.some((p) => p.id === id)) return
-        set({ activeProjectId: id, activeCanEdit: true })
+        set({ activeProjectId: id, activeCanEdit: true, loading: true, saveStatus: 'idle', hasUnsavedChanges: false, saveError: null })
         const full = await fetchFull(id, scope)
-        if (!full) { useFlowStore.getState().resetCanvas(); set({ activeCanEdit: false }); return }
+        if (!full) {
+          useFlowStore.getState().resetCanvas()
+          set({ activeCanEdit: false, loading: false, saveStatus: 'error', saveError: '项目加载失败' })
+          return
+        }
         set({
           activeCanEdit: full.canEdit !== false,
           projects: get().projects.map((p) =>
@@ -193,21 +227,72 @@ export const useProjectStore = create<ProjectState>()(
         })
         if (full.snapshot) useFlowStore.getState().loadCanvas(full.snapshot)
         else useFlowStore.getState().resetCanvas()
+        set({ loading: false, saveStatus: 'saved', hasUnsavedChanges: false, lastSavedAt: full.updatedAt ?? Date.now(), saveError: null })
       },
 
       saveCurrentProject: async (keepalive = false) => {
         const { activeProjectId, activeCanEdit, scope } = get()
         if (!activeProjectId || !activeCanEdit) return
         const snapshot = flowSnapshot()
-        try {
-          await fetch(`/api/projects/${activeProjectId}`, {
+        const saveOnce = async () => {
+          const projectId = get().activeProjectId
+          if (!projectId || !get().activeCanEdit) return
+          const nextSnapshot = flowSnapshot()
+          set({ saveStatus: 'saving', saveError: null })
+          const res = await fetch(`/api/projects/${projectId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ snapshot: nextSnapshot, scope: get().scope }),
+            keepalive,
+          })
+          if (!res.ok) throw new Error(`保存失败 HTTP ${res.status}`)
+          const savedAt = Date.now()
+          set({
+            projects: get().projects.map((p) => (p.id === projectId ? { ...p, snapshot: nextSnapshot, updatedAt: savedAt } : p)),
+            hasUnsavedChanges: false,
+            saveStatus: 'saved',
+            lastSavedAt: savedAt,
+            saveError: null,
+          })
+        }
+
+        if (keepalive) {
+          fetch(`/api/projects/${activeProjectId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ snapshot, scope }),
-            keepalive,
-          })
-        } catch { /* best effort */ }
-        set({ projects: get().projects.map((p) => (p.id === activeProjectId ? { ...p, snapshot, updatedAt: Date.now() } : p)) })
+            keepalive: true,
+          }).catch(() => {})
+          return
+        }
+
+        if (saveInFlight) {
+          saveQueued = true
+          await saveInFlight
+          return
+        }
+
+        saveInFlight = (async () => {
+          do {
+            saveQueued = false
+            try {
+              await saveOnce()
+            } catch (err) {
+              set({
+                hasUnsavedChanges: true,
+                saveStatus: 'error',
+                saveError: err instanceof Error ? err.message : '保存失败',
+              })
+              return
+            }
+          } while (saveQueued)
+        })()
+
+        try {
+          await saveInFlight
+        } finally {
+          saveInFlight = null
+        }
       },
 
       duplicateProject: async (id) => {
@@ -278,6 +363,7 @@ export async function initStoreForUser(userId: string | null) {
     useProjectStore.setState({
       userId: null, scope: 'personal', projects: [], teams: [],
       activeProjectId: null, activeCanEdit: true, loading: false,
+      saveStatus: 'idle', hasUnsavedChanges: false, lastSavedAt: null, saveError: null,
     })
     useFlowStore.getState().resetCanvas()
     return
@@ -286,6 +372,7 @@ export async function initStoreForUser(userId: string | null) {
 
   useProjectStore.setState({
     userId, scope: 'personal', projects: [], activeProjectId: null, activeCanEdit: true, loading: true,
+    saveStatus: 'idle', hasUnsavedChanges: false, lastSavedAt: null, saveError: null,
   })
   useFlowStore.getState().resetCanvas()
 

@@ -63,6 +63,7 @@ export interface VideoGenRequest {
 export interface VideoGenResponse {
   taskId: string
   status: TaskStatus
+  provider?: string
   /** 完成后返回的视频 URL */
   videoUrl?: string
   /** 预估等待时间（秒） */
