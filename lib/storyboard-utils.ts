@@ -19,6 +19,11 @@ export interface StoryboardRowData {
   dialogue?: string
   camera?: string
   shotType?: string
+  blocking?: string
+  action?: string
+  expression?: string
+  cameraAngle?: string
+  composition?: string
   negativePrompt?: string
   aspectRatio?: string
   rowIndex: number
@@ -28,6 +33,21 @@ export interface StoryboardRowData {
 /** Extract plain name from a node label like "场景：直播间" → "直播间" */
 function labelToName(label: string): string {
   return label.includes('：') ? label.split('：')[1] : label
+}
+
+function rowAssetSearchText(row: Record<string, unknown>) {
+  return [
+    row.description,
+    row.blocking,
+    row.action,
+    row.expression,
+    row.cameraAngle,
+    row.composition,
+    row.dialogue,
+    row.locationName,
+    ...((row.characters as string[] | undefined) ?? []),
+    ...((row.propNames as string[] | undefined) ?? []),
+  ].filter(Boolean).join('\n')
 }
 
 export function getStoryboardRowData(
@@ -52,6 +72,10 @@ export function getStoryboardRowData(
       const nodeById = (nid?: string) => nid ? allNodes.find((x) => x.id === nid) : undefined
       const imgOf = (nodeId?: string, fallback?: string): string | undefined =>
         (nodeById(nodeId)?.data.imageUrl as string | undefined) ?? fallback
+      const pushAsset = (asset: NamedAsset) => {
+        const exists = namedAssets.some((a) => a.type === asset.type && a.name === asset.name)
+        if (!exists) namedAssets.push(asset)
+      }
 
       // Scene / location — prefer stored locationName, fall back to scene node label
       const sceneNodeId = row.sceneNodeId as string | undefined
@@ -61,7 +85,7 @@ export function getStoryboardRowData(
         (sceneNode ? labelToName(sceneNode.data.label as string) : undefined)
 
       if (locationName) {
-        namedAssets.push({
+        pushAsset({
           name: locationName,
           url: imgOf(sceneNodeId, sceneImages[0]),
           type: 'scene',
@@ -73,7 +97,7 @@ export function getStoryboardRowData(
       const characters: string[] = row.characters ?? []
       const characterNodeIds: string[] = row.characterNodeIds ?? []
       characters.forEach((name: string, i: number) => {
-        namedAssets.push({
+        pushAsset({
           name,
           url: imgOf(characterNodeIds[i], characterImages[i]),
           type: 'char',
@@ -92,13 +116,36 @@ export function getStoryboardRowData(
           }).filter(Boolean)
 
       propNames.forEach((name: string, i: number) => {
-        namedAssets.push({
+        pushAsset({
           name,
           url: imgOf(propNodeIds[i], propImages[i]),
           type: 'prop',
           nodeId: propNodeIds[i],
         })
       })
+
+      const text = rowAssetSearchText(row)
+      allNodes
+        .filter((n) => n.data.type === 'image' && n.data.mode === 'result')
+        .forEach((n) => {
+          const label = n.data.label as string
+          const name = labelToName(label)
+          if (!name || !text.includes(name)) return
+          const type: NamedAsset['type'] | null = label.startsWith('场景：')
+            ? 'scene'
+            : label.startsWith('角色：')
+              ? 'char'
+              : label.startsWith('道具：')
+                ? 'prop'
+                : null
+          if (!type) return
+          pushAsset({
+            name,
+            url: n.data.imageUrl as string | undefined,
+            type,
+            nodeId: n.id,
+          })
+        })
     }
 
     return {
@@ -112,6 +159,11 @@ export function getStoryboardRowData(
       dialogue: row.dialogue,
       camera: row.camera,
       shotType: row.shotType,
+      blocking: row.blocking,
+      action: row.action,
+      expression: row.expression,
+      cameraAngle: row.cameraAngle,
+      composition: row.composition,
       negativePrompt: row.negativePrompt,
       aspectRatio: row.aspectRatio,
       rowIndex: idx,

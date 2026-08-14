@@ -160,6 +160,12 @@ export async function videoGenSeedance(
   if (req.resolution) {
     body.resolution = req.resolution
   }
+  if (req.ratio) {
+    body.ratio = req.ratio
+  }
+  if (req.duration) {
+    body.duration = req.duration
+  }
 
   // 提交异步任务（带重试）
   const url = `${config.baseUrl.replace(/\/+$/, '')}/contents/generations/tasks`

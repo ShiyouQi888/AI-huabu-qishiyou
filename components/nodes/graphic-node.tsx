@@ -13,6 +13,7 @@ import { ModelSelector } from '@/components/model-selector'
 import { NodeBase } from './node-base'
 import { useModels } from '@/hooks/use-models'
 import { cn } from '@/lib/utils'
+import { CopyButton } from '@/components/copy-button'
 
 // ratio: 映射到 image-node 支持的比例
 const DESIGN_TYPES = [
@@ -251,7 +252,8 @@ ${typeHint}${styleHint}
       </div>
 
       {/* Requirement input */}
-      <div className="nodrag nopan mt-2.5 rounded-xl border border-border/50 bg-muted/20 transition-colors focus-within:border-primary/60 focus-within:ring-1 focus-within:ring-primary/20">
+      <div className="nodrag nopan relative mt-2.5 rounded-xl border border-border/50 bg-muted/20 transition-colors focus-within:border-primary/60 focus-within:ring-1 focus-within:ring-primary/20">
+        <CopyButton text={requirement} iconOnly title="复制设计需求" className="absolute right-2 bottom-2 z-10" />
         <textarea
           value={requirement}
           onChange={(e) => handleRequirementChange(e.target.value)}
@@ -261,7 +263,7 @@ ${typeHint}${styleHint}
             ? `描述您的${designType}需求，例如：产品特点、目标人群、品牌调性...`
             : '选择设计类型后，描述您的设计需求和核心卖点...'}
           rows={3}
-          className="nodrag nopan block w-full resize-none bg-transparent px-3.5 py-3 text-[13px] leading-relaxed text-foreground placeholder:text-muted-foreground/40 focus:outline-none"
+          className="nodrag nopan block w-full resize-none bg-transparent px-3.5 py-3 pb-8 text-[13px] leading-relaxed text-foreground placeholder:text-muted-foreground/40 focus:outline-none"
         />
       </div>
 

@@ -12,8 +12,12 @@ import {
   Connection,
   MarkerType,
 } from '@xyflow/react'
+import {
+  buildStoryboardVideoGroups,
+  storyboardRowsToVideoPrompt,
+} from './storyboard-video-groups'
 
-export type NodeType = 'text' | 'image' | 'video' | 'audio' | 'script' | 'scene' | 'storyboard' | 'promptAssistant' | 'screenplay' | 'graphic' | 'graphicBrief' | 'episodeList' | 'group'
+export type NodeType = 'text' | 'image' | 'video' | 'audio' | 'script' | 'scene' | 'storyboard' | 'promptAssistant' | 'screenplay' | 'graphic' | 'graphicBrief' | 'episodeList' | 'videoSynthesis' | 'group'
 export type EdgeStyleType = 'curve' | 'straight'
 
 /** video 工具节点左侧的 4 个 tab 入参点（按 TABS 顺序） */
@@ -94,6 +98,69 @@ interface UndoSnapshot {
 
 const MAX_UNDO = 50
 
+type StoryboardAssetShot = {
+  locationName?: string
+  characterNames?: string[]
+  propNames?: string[]
+  description?: string
+  blocking?: string
+  action?: string
+  expression?: string
+  cameraAngle?: string
+  composition?: string
+  dialogue?: string
+}
+
+const normalizeAssetName = (value: unknown) =>
+  String(value ?? '')
+    .replace(/^@+/, '')
+    .replace(/[：:，,。！？!?.、\s]/g, '')
+    .trim()
+
+const storyboardShotText = (shot: StoryboardAssetShot) => [
+  shot.description,
+  shot.blocking,
+  shot.action,
+  shot.expression,
+  shot.cameraAngle,
+  shot.composition,
+  shot.dialogue,
+  shot.locationName,
+  ...(shot.characterNames ?? []),
+  ...(shot.propNames ?? []),
+].filter(Boolean).join('\n')
+
+const resolveStoryboardAssetNames = (
+  explicitNames: unknown[] | undefined,
+  candidateNames: string[],
+  text: string,
+) => {
+  const normalizedText = normalizeAssetName(text)
+  const result = new Set<string>()
+
+  for (const raw of explicitNames ?? []) {
+    const normalized = normalizeAssetName(raw)
+    if (!normalized) continue
+    const exact = candidateNames.find((name) => normalizeAssetName(name) === normalized)
+    if (exact) {
+      result.add(exact)
+      continue
+    }
+    const fuzzy = candidateNames.find((name) => {
+      const n = normalizeAssetName(name)
+      return n.includes(normalized) || normalized.includes(n)
+    })
+    if (fuzzy) result.add(fuzzy)
+  }
+
+  for (const name of candidateNames) {
+    const normalized = normalizeAssetName(name)
+    if (normalized && normalizedText.includes(normalized)) result.add(name)
+  }
+
+  return Array.from(result)
+}
+
 interface FlowState {
   nodes: Node<CustomNodeData>[]
   edges: Edge[]
@@ -166,10 +233,13 @@ interface FlowState {
       styles?: string[]
       // Structured short-drama data — preserved for the episode-list flow
       contentType?: string
+      dramaTemplate?: string
       firstHook?: string
       episodeDuration?: number
       characters?: Array<{ name: string; role?: string; appearance?: string; personality?: string }>
       episodes?: Array<{ ep: number; title?: string; hook?: string; beats?: string[]; satisfactionPoint?: string; cliffhanger?: string }>
+      storyBible?: unknown
+      qualityReport?: unknown
     }
   ) => void
   createEpisodeAssetsAndList: (
@@ -188,10 +258,16 @@ interface FlowState {
     storyboard: Array<{
       shot: number
       duration: string
+      durationReason?: string
       locationName: string
       characterNames?: string[]
       propNames?: string[]
       description: string
+      blocking?: string
+      action?: string
+      expression?: string
+      cameraAngle?: string
+      composition?: string
       camera: string
       shotType?: string
       dialogue?: string
@@ -199,6 +275,10 @@ interface FlowState {
       aspectRatio?: string
     }>
   ) => string | undefined
+  createStoryboardVideoGroups: (
+    storyboardNodeId: string,
+    options: { maxDuration: 15 | 30; modelLabel?: string; modelId?: string; ratio?: string; resolution?: string }
+  ) => number
   createNodesFromScreenplay: (
     screenplayNodeId: string,
     data: {
@@ -220,10 +300,16 @@ interface FlowState {
       storyboard: Array<{
         shot: number
         duration: string
+        durationReason?: string
         locationName: string
         characterNames?: string[]
         propNames?: string[]
         description: string
+        blocking?: string
+        action?: string
+        expression?: string
+        cameraAngle?: string
+        composition?: string
         camera: string
         shotType?: string
         dialogue?: string
@@ -273,6 +359,7 @@ const emptyNodeCount: Record<NodeType, number> = {
   graphic: 0,
   graphicBrief: 0,
   episodeList: 0,
+  videoSynthesis: 0,
   group: 0,
 }
 
@@ -496,6 +583,7 @@ const NODE_TYPE_MAP: Record<NodeType, string> = {
   graphic: 'graphicNode',
   graphicBrief: 'graphicBriefNode',
   episodeList: 'episodeListNode',
+  videoSynthesis: 'videoSynthesisNode',
   group: 'groupNode',
 }
 
@@ -512,6 +600,7 @@ const LABEL_MAP: Record<NodeType, string> = {
   graphic: 'AI 平面',
   graphicBrief: '创意方案',
   episodeList: '剧集列表',
+  videoSynthesis: 'AI 成片',
   group: '分组',
 }
 
@@ -1088,10 +1177,13 @@ export const useFlowStore = create<FlowState>()(
               // Preserve structured short-drama data so the screenplay node can
               // drive the whole-drama asset extraction + per-episode storyboard flow.
               contentType: screenplay.contentType,
+              dramaTemplate: screenplay.dramaTemplate,
               firstHook: screenplay.firstHook,
               episodeDuration: screenplay.episodeDuration,
               characters: screenplay.characters ?? [],
               episodes: screenplay.episodes ?? [],
+              storyBible: screenplay.storyBible,
+              qualityReport: screenplay.qualityReport,
             }),
           },
         }
@@ -1391,20 +1483,24 @@ export const useFlowStore = create<FlowState>()(
         const rowPropNodeIds: string[][] = []
 
         const rows = storyboard.map((shot, i) => {
-          // Scene: direct lookup first, then fallback to any location name found in description
-          const sceneNId = locationNodeMap.get(shot.locationName) ?? (() => {
-            for (const [name, nid] of locationNodeMap) {
-              if (shot.description?.includes(name)) return nid
-            }
-            return undefined
-          })()
+          const shotText = storyboardShotText(shot)
 
-          // Characters: merge explicit list + any character name that appears in description text
-          const descText = shot.description ?? ''
-          const mentionedCharNames = characters
-            .filter((c) => descText.includes(c.name))
-            .map((c) => c.name)
-          const allCharNames = Array.from(new Set([...(shot.characterNames ?? []), ...mentionedCharNames]))
+          // Scene: direct/fuzzy lookup + any location name found across all structured shot fields
+          const locationNames = Array.from(locationNodeMap.keys())
+          const resolvedLocations = resolveStoryboardAssetNames(
+            shot.locationName ? [shot.locationName] : [],
+            locationNames,
+            shotText,
+          )
+          const resolvedLocationName = resolvedLocations[0] ?? shot.locationName
+          const sceneNId = resolvedLocations.map((name) => locationNodeMap.get(name)).find(Boolean)
+
+          // Characters: merge explicit list + any character name found across all shot fields
+          const allCharNames = resolveStoryboardAssetNames(
+            shot.characterNames,
+            characters.map((c) => c.name),
+            shotText,
+          )
           const charNIds = allCharNames
             .map((name) => {
               const idx = characters.findIndex((c) => c.name === name)
@@ -1412,11 +1508,12 @@ export const useFlowStore = create<FlowState>()(
             })
             .filter((id): id is string => id !== null)
 
-          // Props: merge explicit list + any prop name that appears in description text
-          const mentionedPropNames = props
-            .filter((p) => descText.includes(p.name))
-            .map((p) => p.name)
-          const allPropNames = Array.from(new Set([...(shot.propNames ?? []), ...mentionedPropNames]))
+          // Props: merge explicit list + any prop name found across all shot fields
+          const allPropNames = resolveStoryboardAssetNames(
+            shot.propNames,
+            props.map((p) => p.name),
+            shotText,
+          )
           const propNIds = allPropNames
             .map((name) => propNodeMap.get(name))
             .filter((id): id is string => !!id)
@@ -1427,14 +1524,20 @@ export const useFlowStore = create<FlowState>()(
 
           return {
             description: shot.description,
+            blocking: shot.blocking ?? '',
+            action: shot.action ?? '',
+            expression: shot.expression ?? '',
+            cameraAngle: shot.cameraAngle ?? '',
+            composition: shot.composition ?? '',
             dialogue: shot.dialogue ?? '',
             duration: shot.duration,
+            durationReason: shot.durationReason ?? '',
             camera: shot.camera,
             shotType: shot.shotType ?? '',
             negativePrompt: shot.negativePrompt ?? '低质量，模糊，水印',
             aspectRatio: shot.aspectRatio ?? '16:9',
             characters: allCharNames,
-            locationName: shot.locationName,
+            locationName: resolvedLocationName,
             propNames: allPropNames,
             sceneIndex: shot.shot ?? i + 1,
             sceneNodeId: sceneNId,
@@ -1581,6 +1684,7 @@ export const useFlowStore = create<FlowState>()(
               title: spContent.title ?? '',
               episodeDuration: data.episodeDuration ?? spContent.episodeDuration ?? 90,
               styles,
+              template: spContent.dramaTemplate,
               characters,
               locations: locations.map((l) => l.name),
               assetRefs: { chars: charRefs, locs: locRefs, props: propRefs },
@@ -1624,20 +1728,21 @@ export const useFlowStore = create<FlowState>()(
         const rowPropNodeIds: string[][] = []
 
         const rows = storyboard.map((shot, i) => {
-          const descText = shot.description ?? ''
-          // Scene: direct name lookup, else any location name found in description
-          const sceneNId = locRefs[shot.locationName] ?? (() => {
-            for (const name of Object.keys(locRefs)) {
-              if (descText.includes(name)) return locRefs[name]
-            }
-            return undefined
-          })()
-          const mentionedCharNames = characterNames.filter((n) => descText.includes(n))
-          const allCharNames = Array.from(new Set([...(shot.characterNames ?? []), ...mentionedCharNames]))
+          const shotText = storyboardShotText(shot)
+          // Scene: direct/fuzzy lookup + any location name found across all structured shot fields
+          const locationNames = Object.keys(locRefs)
+          const resolvedLocations = resolveStoryboardAssetNames(
+            shot.locationName ? [shot.locationName] : [],
+            locationNames,
+            shotText,
+          )
+          const resolvedLocationName = resolvedLocations[0] ?? shot.locationName
+          const sceneNId = resolvedLocations.map((name) => locRefs[name]).find(Boolean)
+
+          const allCharNames = resolveStoryboardAssetNames(shot.characterNames, characterNames, shotText)
           const charNIds = allCharNames.map((n) => charRefs[n]).filter((x): x is string => !!x)
 
-          const mentionedPropNames = propNamesAll.filter((n) => descText.includes(n))
-          const allPropNames = Array.from(new Set([...(shot.propNames ?? []), ...mentionedPropNames]))
+          const allPropNames = resolveStoryboardAssetNames(shot.propNames, propNamesAll, shotText)
           const propNIds = allPropNames.map((n) => propRefs[n]).filter((x): x is string => !!x)
 
           rowSceneNodeIds.push(sceneNId)
@@ -1646,14 +1751,20 @@ export const useFlowStore = create<FlowState>()(
 
           return {
             description: shot.description,
+            blocking: shot.blocking ?? '',
+            action: shot.action ?? '',
+            expression: shot.expression ?? '',
+            cameraAngle: shot.cameraAngle ?? '',
+            composition: shot.composition ?? '',
             dialogue: shot.dialogue ?? '',
             duration: shot.duration,
+            durationReason: shot.durationReason ?? '',
             camera: shot.camera,
             shotType: shot.shotType ?? '',
             negativePrompt: shot.negativePrompt ?? '低质量，模糊，水印',
             aspectRatio: shot.aspectRatio ?? '16:9',
             characters: allCharNames,
-            locationName: shot.locationName,
+            locationName: resolvedLocationName,
             propNames: allPropNames,
             sceneIndex: shot.shot ?? i + 1,
             sceneNodeId: sceneNId,
@@ -1696,6 +1807,131 @@ export const useFlowStore = create<FlowState>()(
         })
 
         return sbId
+      },
+
+      createStoryboardVideoGroups: (storyboardNodeId, options) => {
+        const sbNode = get().nodes.find((n) => n.id === storyboardNodeId)
+        if (!sbNode) return 0
+        const rows = (() => {
+          try {
+            const parsed = JSON.parse((sbNode.data.content as string) || '[]')
+            return Array.isArray(parsed) ? parsed as Array<Record<string, unknown>> : []
+          } catch {
+            return []
+          }
+        })()
+        const maxDuration = options.maxDuration
+        const groups = buildStoryboardVideoGroups(rows, maxDuration)
+        if (groups.length === 0) return 0
+
+        get()._pushUndo()
+        const nodeCount = { ...get().nodeCount }
+        const edgeStyle = get().edgeStyleType
+        const now = Date.now()
+        const baseX = sbNode.position.x + 1460
+        const baseY = sbNode.position.y
+        const newNodes: Node<CustomNodeData>[] = []
+        const newEdges: Edge[] = []
+        let videoCount = nodeCount.video ?? 0
+
+        groups.forEach((group, groupIndex) => {
+          videoCount += 1
+          const firstShot = group.start + 1
+          const lastShot = group.start + group.rows.length
+          const videoId = `video-${now}-${groupIndex}`
+          const prompt = storyboardRowsToVideoPrompt(group.rows, group.start, group.seconds, maxDuration)
+          const meta = JSON.stringify({
+            duration: Math.min(maxDuration, Math.round(group.seconds)),
+            ratio: options.ratio ?? '16:9',
+            resolution: options.resolution ?? '720p',
+            modelId: options.modelId,
+            storyboardGroup: {
+              firstShot,
+              lastShot,
+              maxDuration,
+              modelLabel: options.modelLabel ?? `Seedance ${maxDuration}s`,
+            },
+          })
+
+          newNodes.push({
+            id: videoId,
+            type: NODE_TYPE_MAP.video,
+            position: { x: baseX, y: baseY + groupIndex * 260 },
+            data: {
+              label: `视频段 ${firstShot}-${lastShot}`,
+              type: 'video',
+              status: 'ready',
+              content: prompt,
+              meta,
+            },
+          })
+
+          group.rows.forEach((_, rowOffset) => {
+            newEdges.push(buildEdge(storyboardNodeId, videoId, edgeStyle, {
+              sourceHandle: `row-${group.start + rowOffset}`,
+              targetHandle: 'tab-ref',
+            }))
+          })
+
+          const refIds = new Set<string>()
+          const imageResultNodes = get().nodes.filter((n) => n.data.type === 'image' && n.data.mode === 'result')
+          const imageResultByLabelName = (prefix: string, name: unknown) => {
+            const targetName = normalizeAssetName(name)
+            if (!targetName) return undefined
+            return imageResultNodes.find((node) => {
+              const label = String(node.data.label ?? '')
+              if (!label.startsWith(prefix)) return false
+              const labelName = normalizeAssetName(label.slice(prefix.length))
+              return labelName === targetName || labelName.includes(targetName) || targetName.includes(labelName)
+            })?.id
+          }
+          group.rows.forEach((row) => {
+            const rowText = storyboardShotText({
+              description: String(row.description ?? ''),
+              blocking: String(row.blocking ?? ''),
+              action: String(row.action ?? ''),
+              expression: String(row.expression ?? ''),
+              cameraAngle: String(row.cameraAngle ?? ''),
+              composition: String(row.composition ?? ''),
+              dialogue: String(row.dialogue ?? ''),
+              locationName: String(row.locationName ?? ''),
+              characterNames: row.characters as string[] | undefined,
+              propNames: row.propNames as string[] | undefined,
+            })
+
+            if (typeof row.sceneNodeId === 'string') refIds.add(row.sceneNodeId)
+            const inferredSceneId = imageResultByLabelName('场景：', row.locationName)
+            if (inferredSceneId) refIds.add(inferredSceneId)
+
+            for (const refId of (row.characterNodeIds as string[] | undefined) ?? []) refIds.add(refId)
+            for (const name of (row.characters as string[] | undefined) ?? []) {
+              const inferredCharId = imageResultByLabelName('角色：', name)
+              if (inferredCharId) refIds.add(inferredCharId)
+            }
+
+            for (const refId of (row.propNodeIds as string[] | undefined) ?? []) refIds.add(refId)
+            for (const name of (row.propNames as string[] | undefined) ?? []) {
+              const inferredPropId = imageResultByLabelName('道具：', name)
+              if (inferredPropId) refIds.add(inferredPropId)
+            }
+
+            imageResultNodes.forEach((node) => {
+              const label = String(node.data.label ?? '')
+              const assetName = label.includes('：') ? label.split('：').slice(1).join('：') : label
+              if (assetName && rowText.includes(assetName)) refIds.add(node.id)
+            })
+          })
+          refIds.forEach((refId) => {
+            newEdges.push(buildEdge(refId, videoId, edgeStyle, { targetHandle: 'tab-ref' }))
+          })
+        })
+
+        set({
+          nodes: [...get().nodes, ...newNodes],
+          edges: [...get().edges, ...newEdges],
+          nodeCount: { ...nodeCount, video: videoCount },
+        })
+        return groups.length
       },
 
       loadCanvas: ({ nodes, edges, nodeCount }) => {

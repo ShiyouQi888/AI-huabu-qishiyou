@@ -8,9 +8,11 @@ import { ModelSelector } from '@/components/model-selector'
 import { NodeBase } from './node-base'
 import { useModels } from '@/hooks/use-models'
 import { cn } from '@/lib/utils'
+import { CopyButton } from '@/components/copy-button'
 import {
   ContentType, CONTENT_GROUPS, CONTENT_TYPE_LABELS,
-  DRAMA_BATCH_SIZE, buildShortDramaPrompt, buildDramaEpisodesBatchPrompt,
+  DRAMA_BATCH_SIZE, buildShortDramaBiblePrompt, buildShortDramaPrompt, buildDramaEpisodesBatchPrompt,
+  buildDramaQualityReviewPrompt, DramaQualityReport, ShortDramaStoryBible, getDramaTemplateFormula,
   buildMoviePrompt, buildMicrofilmPrompt,
   buildShortVideoPrompt, buildVlogPrompt, buildLivestreamPrompt,
   buildAdPrompt, buildPromoPrompt, buildMVPrompt, buildMotionPosterPrompt,
@@ -147,6 +149,12 @@ function ShortDramaParams({ state, setState }: {
       <ParamRow label="爽点类型">
         <PillGroup options={DRAMA_SATISFACTION} value={state.satisfactionType} onChange={(v) => setState({ satisfactionType: v })} />
       </ParamRow>
+      <div className="rounded-lg border border-amber-500/15 bg-amber-500/5 px-2.5 py-2">
+        <div className="mb-1 text-[10px] font-medium text-amber-500/80">模板结构公式</div>
+        <div className="text-[11px] leading-relaxed text-muted-foreground">
+          {getDramaTemplateFormula(state.template).join(' → ')}
+        </div>
+      </div>
     </div>
   )
 }
@@ -451,6 +459,9 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
   const [charCount, setCharCount] = useState(0)
   const [generated, setGenerated] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
+  const [generationStage, setGenerationStage] = useState('')
+  const [storyBible, setStoryBible] = useState<ShortDramaStoryBible | null>(null)
+  const [qualityReport, setQualityReport] = useState<DramaQualityReport | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   const { models: textModels } = useModels({ type: 'text' })
@@ -495,6 +506,9 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
     setGenerated(false)
     setCharCount(0)
     setGenError(null)
+    setGenerationStage(contentType === 'shortdrama' ? '生成故事圣经' : '生成内容方案')
+    setStoryBible(null)
+    setQualityReport(null)
     updateNodeData(id, { status: 'generating' })
 
     const controller = new AbortController()
@@ -502,11 +516,17 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
     const { system, user } = buildPrompt()
 
     // One text-generation call
-    const callText = async (sys: string, usr: string) => {
+    const callText = async (sys: string, usr: string, opts: { temperature?: number; maxTokens?: number } = {}) => {
       const res = await fetch('/api/generate/text', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: selectedModel, prompt: usr, systemPrompt: sys, temperature: 0.8, maxTokens: 8000 }),
+        body: JSON.stringify({
+          model: selectedModel,
+          prompt: usr,
+          systemPrompt: sys,
+          temperature: opts.temperature ?? 0.8,
+          maxTokens: opts.maxTokens ?? 8000,
+        }),
         signal: controller.signal,
       })
       if (!res.ok) {
@@ -518,26 +538,117 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
       if (!t) throw new Error('生成结果为空')
       return t
     }
-    const parseJson = (raw: string) => {
-      const m = raw.match(/\{[\s\S]*\}/)
-      if (!m) throw new Error('无法解析生成内容，请重试')
-      const s = m[0].replace(/,\s*\]/g, ']').replace(/,\s*\}/g, '}').replace(/:\s*undefined/g, ': null')
-      return JSON.parse(s)
+    const extractJsonObject = (raw: string) => {
+      const text = raw.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim()
+      const start = text.indexOf('{')
+      if (start < 0) return ''
+      let depth = 0
+      let inString = false
+      let escaped = false
+      for (let i = start; i < text.length; i++) {
+        const ch = text[i]
+        if (inString) {
+          if (escaped) {
+            escaped = false
+          } else if (ch === '\\') {
+            escaped = true
+          } else if (ch === '"') {
+            inString = false
+          }
+          continue
+        }
+        if (ch === '"') inString = true
+        if (ch === '{') depth++
+        if (ch === '}') {
+          depth--
+          if (depth === 0) return text.slice(start, i + 1)
+        }
+      }
+      return text.slice(start)
+    }
+    const cleanupJson = (raw: string) => extractJsonObject(raw)
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/,\s*([\]}])/g, '$1')
+      .replace(/:\s*undefined/g, ': null')
+    const parseJsonStrict = (raw: string) => {
+      const json = cleanupJson(raw)
+      if (!json) throw new Error('无法解析生成内容，请重试')
+      return JSON.parse(json)
+    }
+    const parseJson = async (raw: string) => {
+      try {
+        return parseJsonStrict(raw)
+      } catch (firstErr) {
+        const repairedText = await callText(
+          '你是JSON修复器。把用户提供的内容修复为严格合法JSON，只返回JSON，不要解释，不要Markdown。尤其要修复字符串值内部未转义的英文双引号，把它们改成中文引号或正确转义。',
+          `下面内容不是合法JSON。请在不改写字段含义的前提下修复语法错误，保留原有结构和数据，只返回合法JSON。注意：字符串内容里的称谓、台词、片名不要使用未转义英文双引号。\n\n${raw.slice(0, 18000)}`,
+          { temperature: 0.05, maxTokens: 10000 },
+        )
+        try {
+          return parseJsonStrict(repairedText)
+        } catch {
+          throw firstErr
+        }
+      }
     }
 
     try {
-      const fullText = await callText(system, user)
-      setCharCount(fullText.length)
-      const parsed = parseJson(fullText)
+      let parsed: any
+      let bible: ShortDramaStoryBible | null = null
+      let review: DramaQualityReport | null = null
+
+      if (contentType === 'shortdrama') {
+        const biblePrompt = buildShortDramaBiblePrompt({
+          template: drama.template,
+          episodeCount: drama.epCount,
+          episodeDuration: drama.epDur,
+          brief,
+          satisfactionType: drama.satisfactionType,
+        })
+        const bibleText = await callText(biblePrompt.system, biblePrompt.user)
+        setCharCount((c) => c + bibleText.length)
+        bible = await parseJson(bibleText) as ShortDramaStoryBible
+        setStoryBible(bible)
+
+        setGenerationStage('生成分集大纲')
+        const outlinePrompt = buildShortDramaPrompt({
+          template: drama.template,
+          episodeCount: drama.epCount,
+          episodeDuration: drama.epDur,
+          brief,
+          satisfactionType: drama.satisfactionType,
+          bible,
+        })
+        const outlineText = await callText(outlinePrompt.system, outlinePrompt.user)
+        setCharCount((c) => c + outlineText.length)
+        parsed = await parseJson(outlineText)
+        parsed = {
+          ...parsed,
+          title: parsed.title || bible.title,
+          synopsis: parsed.synopsis || bible.synopsis,
+          firstHook: parsed.firstHook || bible.firstHook,
+          storyBible: bible.storyBible,
+          characters: parsed.characters?.length ? parsed.characters : (bible.characters ?? []),
+          content: parsed.content || bible.content || '',
+        }
+      } else {
+        const fullText = await callText(system, user)
+        setCharCount(fullText.length)
+        parsed = await parseJson(fullText)
+      }
       if (!parsed.title) throw new Error('格式错误：缺少标题字段')
 
       // Short drama: the first call yields up to DRAMA_BATCH_SIZE episode outlines.
       // Fill the rest in continuation batches until we reach the chosen episode count.
-      if (contentType === 'shortdrama' && Array.isArray(parsed.episodes)) {
+      if (contentType === 'shortdrama') {
+        if (!Array.isArray(parsed.episodes) || parsed.episodes.length === 0) {
+          throw new Error('分集大纲为空，请重试')
+        }
         const target = drama.epCount
         let episodes = [...parsed.episodes]
         let guard = 0
         while (episodes.length < target && guard < 20) {
+          setGenerationStage(`补充分集 ${episodes.length + 1}-${Math.min(target, episodes.length + DRAMA_BATCH_SIZE)}`)
           guard++
           const from = episodes.length + 1
           const to = Math.min(target, episodes.length + DRAMA_BATCH_SIZE)
@@ -555,11 +666,31 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
           })
           const batchText = await callText(bs, bu)
           setCharCount((c) => c + batchText.length)
-          const batchEps = (() => { try { return parseJson(batchText).episodes } catch { return [] } })()
-          if (!Array.isArray(batchEps) || batchEps.length === 0) break
+          const batchParsed = await parseJson(batchText)
+          const batchEps = batchParsed.episodes
+          if (!Array.isArray(batchEps) || batchEps.length === 0) {
+            throw new Error(`第${from}-${to}集生成为空，请重试`)
+          }
           episodes = [...episodes, ...batchEps]
         }
+        if (episodes.length < target) {
+          throw new Error(`分集数量不足：需要${target}集，实际生成${episodes.length}集，请重试`)
+        }
         parsed.episodes = episodes.slice(0, target).map((e, i) => ({ ...e, ep: e.ep ?? i + 1 }))
+
+        setGenerationStage('编剧质检')
+        const reviewPrompt = buildDramaQualityReviewPrompt({
+          title: parsed.title,
+          synopsis: parsed.synopsis || '',
+          storyBible: parsed.storyBible,
+          characters: parsed.characters ?? [],
+          episodes: parsed.episodes ?? [],
+          episodeDuration: drama.epDur,
+        })
+        const reviewText = await callText(reviewPrompt.system, reviewPrompt.user)
+        setCharCount((c) => c + reviewText.length)
+        review = await parseJson(reviewText) as DramaQualityReport
+        setQualityReport(review)
       }
 
       const contentStr = typeof parsed.content === 'string'
@@ -567,6 +698,7 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
         : JSON.stringify(parsed, null, 2)
 
       const isDrama = contentType === 'shortdrama'
+      setGenerationStage('创建剧本节点')
       createScreenplayNode(id, {
         title: parsed.title,
         synopsis: parsed.synopsis || '',
@@ -574,10 +706,13 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
         scriptDuration: isDrama ? `${drama.epCount}集 × ${drama.epDur}秒` : '',
         styles: [CONTENT_TYPE_LABELS[contentType]],
         contentType,
+        dramaTemplate: isDrama ? drama.template : undefined,
         firstHook: parsed.firstHook,
         episodeDuration: isDrama ? drama.epDur : undefined,
         characters: isDrama ? (parsed.characters ?? []) : undefined,
         episodes: isDrama ? (parsed.episodes ?? []) : undefined,
+        storyBible: isDrama ? (parsed.storyBible ?? bible?.storyBible) : undefined,
+        qualityReport: isDrama ? review : undefined,
       })
 
       setGenerated(true)
@@ -591,6 +726,7 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
       updateNodeData(id, { status: 'failed' })
     } finally {
       setIsGenerating(false)
+      setGenerationStage('')
       abortRef.current = null
     }
   }
@@ -599,6 +735,9 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
     setGenerated(false)
     setGenError(null)
     setCharCount(0)
+    setGenerationStage('')
+    setStoryBible(null)
+    setQualityReport(null)
     updateNodeData(id, { status: brief.trim() ? 'ready' : 'idle' })
   }
 
@@ -670,16 +809,28 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
         {contentType === 'commentary'   && <CommentaryParams state={com} setState={setCom} />}
       </div>
 
+      {contentType === 'shortdrama' && (
+        <div className="mt-2.5 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2.5">
+          <div className="text-[12px] font-semibold text-amber-500">专业短剧流水线</div>
+          <div className="mt-1.5 grid grid-cols-4 gap-1 text-center text-[10px] text-muted-foreground">
+            {['故事圣经', '分集大纲', '编剧质检', '剧本节点'].map((step) => (
+              <div key={step} className="rounded-md bg-background/50 px-1.5 py-1">{step}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ── Brief input ── */}
-      <div className="nodrag nopan mt-2.5 rounded-xl border border-border/50 bg-muted/20 transition-colors focus-within:border-primary/60 focus-within:ring-1 focus-within:ring-primary/20"
+      <div className="nodrag nopan relative mt-2.5 rounded-xl border border-border/50 bg-muted/20 transition-colors focus-within:border-primary/60 focus-within:ring-1 focus-within:ring-primary/20"
         onPointerDown={(e) => e.stopPropagation()}>
+        <CopyButton text={brief} iconOnly title="复制创意方向" className="absolute right-2 bottom-2 z-10" />
         <textarea
           value={brief}
           onChange={(e) => handleBriefChange(e.target.value)}
           onKeyDown={(e) => e.stopPropagation()}
           placeholder={briefPlaceholder[contentType] ?? '输入你的创意方向...'}
           rows={3}
-          className="nodrag nopan block w-full resize-none bg-transparent px-3.5 py-3 text-[13px] leading-relaxed text-foreground placeholder:text-muted-foreground/40 focus:outline-none"
+          className="nodrag nopan block w-full resize-none bg-transparent px-3.5 py-3 pb-8 text-[13px] leading-relaxed text-foreground placeholder:text-muted-foreground/40 focus:outline-none"
         />
       </div>
 
@@ -687,7 +838,7 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
       {isGenerating && (
         <div className="mt-2.5 flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/5 px-3.5 py-3">
           <Loader2 className="size-4 animate-spin text-primary" />
-          <span className="text-[12px] text-primary">AI 正在创作...</span>
+          <span className="text-[12px] text-primary">{generationStage ? `AI 正在${generationStage}...` : 'AI 正在创作...'}</span>
           {charCount > 0 && <span className="ml-auto text-[10px] text-primary/50">{charCount.toLocaleString()} 字</span>}
         </div>
       )}
@@ -699,10 +850,55 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
       )}
 
       {generated && !isGenerating && (
-        <div className="mt-2.5 flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3.5 py-2.5">
-          <Check className="size-3.5 text-emerald-500" />
-          <span className="text-[12px] text-emerald-400">已生成，脚本节点已创建在画布上</span>
-        </div>
+        <>
+          <div className="mt-2.5 flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3.5 py-2.5">
+            <Check className="size-3.5 text-emerald-500" />
+            <span className="text-[12px] text-emerald-400">已生成，剧本节点已创建在画布上</span>
+          </div>
+          {contentType === 'shortdrama' && (qualityReport || storyBible) && (
+            <div className="mt-2.5 rounded-xl border border-border/40 bg-muted/10 px-3.5 py-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[12px] font-semibold text-foreground/85">编剧质检</span>
+                <div className="flex items-center gap-1.5">
+                  <CopyButton
+                    text={[
+                      qualityReport?.totalScore !== undefined ? `总分：${qualityReport.totalScore}/100` : '',
+                      qualityReport?.verdict ? `结论：${qualityReport.verdict}` : '',
+                      qualityReport?.risks?.length ? `风险：\n${qualityReport.risks.map((x) => `- ${x}`).join('\n')}` : '',
+                      qualityReport?.rewriteSuggestions?.length ? `改稿建议：\n${qualityReport.rewriteSuggestions.map((x) => `- ${x}`).join('\n')}` : '',
+                    ].filter(Boolean).join('\n\n')}
+                    iconOnly
+                    title="复制编剧质检"
+                  />
+                  {typeof qualityReport?.totalScore === 'number' && (
+                    <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
+                      {qualityReport.totalScore}/100
+                    </span>
+                  )}
+                </div>
+              </div>
+              {qualityReport?.verdict && (
+                <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">{qualityReport.verdict}</p>
+              )}
+              {qualityReport?.risks && qualityReport.risks.length > 0 && (
+                <div className="mt-2">
+                  <div className="text-[10px] font-medium text-red-400/80">风险</div>
+                  <ul className="mt-1 space-y-1 text-[11px] leading-relaxed text-muted-foreground">
+                    {qualityReport.risks.slice(0, 2).map((item, i) => <li key={i}>• {item}</li>)}
+                  </ul>
+                </div>
+              )}
+              {qualityReport?.rewriteSuggestions && qualityReport.rewriteSuggestions.length > 0 && (
+                <div className="mt-2">
+                  <div className="text-[10px] font-medium text-amber-500/85">改稿建议</div>
+                  <ul className="mt-1 space-y-1 text-[11px] leading-relaxed text-muted-foreground">
+                    {qualityReport.rewriteSuggestions.slice(0, 3).map((item, i) => <li key={i}>• {item}</li>)}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
 
       {/* ── Bottom bar ── */}

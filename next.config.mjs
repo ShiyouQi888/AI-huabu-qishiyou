@@ -7,7 +7,9 @@ const nextConfig = {
     unoptimized: true,
   },
   experimental: {
-    serverBodySizeLimit: '10mb',
+    serverActions: {
+      bodySizeLimit: '10mb',
+    },
   },
 }
 

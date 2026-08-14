@@ -1,13 +1,17 @@
 'use client'
 
-import { memo, useState, useCallback, useRef, useLayoutEffect, useEffect, useMemo } from 'react'
+import { memo, useState, useCallback, useRef, useLayoutEffect, useEffect, useMemo, type ReactNode } from 'react'
 import { NodeProps, Node } from '@xyflow/react'
-import { Clapperboard, Plus, Upload, X, ZoomIn } from 'lucide-react'
+import { ChevronDown, Clapperboard, Film, Monitor, Plus, Ratio, Upload, X, ZoomIn } from 'lucide-react'
 import { CustomNodeData, useFlowStore } from '@/lib/store'
 import { NodeBase } from './node-base'
+import { CopyButton } from '@/components/copy-button'
+import { buildStoryboardVideoGroups } from '@/lib/storyboard-video-groups'
 
 const SHOT_TYPES = ['特写', '近景', '中景', '中全景', '全景', '远景', '大远景']
 const CAMERA_MOVES = ['固定', '推', '拉', '摇', '移', '跟', '升', '降', '环绕', '甩', '晃', '航拍']
+const VIDEO_RATIOS = ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16', 'auto']
+const VIDEO_RESOLUTIONS = ['480p', '720p', '1080p']
 
 interface StoryboardRow {
   sceneIndex: number
@@ -19,10 +23,18 @@ interface StoryboardRow {
   sceneImage?: string
   characterImage?: string
   characters?: string[]
+  locationName?: string
+  propNames?: string[]
   shotType?: string
+  blocking?: string
+  action?: string
+  expression?: string
+  cameraAngle?: string
+  composition?: string
   camera: string
   dialogue: string
   duration?: string
+  durationReason?: string
   negativePrompt?: string
   aspectRatio?: string
   outputMode?: string
@@ -51,7 +63,64 @@ function parseRows(content?: string): StoryboardRow[] {
 }
 
 function emptyRow(idx: number): StoryboardRow {
-  return { sceneIndex: idx, description: '', camera: '', dialogue: '', shotType: '', sceneImages: [], characterImages: [], propImages: [] }
+  return {
+    sceneIndex: idx,
+    description: '',
+    blocking: '',
+    action: '',
+    expression: '',
+    cameraAngle: '',
+    composition: '',
+    camera: '',
+    dialogue: '',
+    shotType: '',
+    sceneImages: [],
+    characterImages: [],
+    propImages: [],
+  }
+}
+
+function rowAssetSearchText(row: StoryboardRow) {
+  return [
+    row.description,
+    row.blocking,
+    row.action,
+    row.expression,
+    row.cameraAngle,
+    row.composition,
+    row.dialogue,
+    row.locationName,
+    ...(row.characters ?? []),
+    ...(row.propNames ?? []),
+  ].filter(Boolean).join('\n')
+}
+
+function assetNameFromLabel(label: string, prefix: string) {
+  return label.startsWith(prefix) ? label.slice(prefix.length) : ''
+}
+
+function storyboardRowToText(row: StoryboardRow, index: number) {
+  return [
+    `镜号：${index + 1}`,
+    row.duration ? `时长：${row.duration}` : '',
+    row.durationReason ? `时长依据：${row.durationReason}` : '',
+    row.locationName ? `场景：${row.locationName}` : '',
+    row.characters?.length ? `角色：${row.characters.join('、')}` : '',
+    row.propNames?.length ? `道具：${row.propNames.join('、')}` : '',
+    row.description ? `画面内容：${row.description}` : '',
+    row.blocking ? `站位：${row.blocking}` : '',
+    row.action ? `动作：${row.action}` : '',
+    row.expression ? `表情：${row.expression}` : '',
+    row.cameraAngle ? `机位：${row.cameraAngle}` : '',
+    row.composition ? `构图：${row.composition}` : '',
+    row.shotType ? `景别：${row.shotType}` : '',
+    row.camera ? `运镜：${row.camera}` : '',
+    row.dialogue ? `旁白/台词：${row.dialogue}` : '',
+  ].filter(Boolean).join('\n')
+}
+
+function countVideoGroups(rows: StoryboardRow[], maxDuration: 15 | 30) {
+  return buildStoryboardVideoGroups(rows as unknown as Array<Record<string, unknown>>, maxDuration).length
 }
 
 function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
@@ -134,6 +203,96 @@ function DropdownCell({ value, options, placeholder, onChange }: {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+function VideoSettingChip({
+  value,
+  options,
+  label,
+  icon,
+  onChange,
+}: {
+  value: string
+  options: string[]
+  label: string
+  icon: ReactNode
+  onChange: (v: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as HTMLElement)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex min-w-[86px] items-center justify-center gap-1.5 rounded-full border border-border/45 bg-muted/20 px-2.5 py-1 text-[11px] font-medium text-foreground transition-colors hover:border-primary/35 hover:bg-primary/10 hover:text-primary"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={label}
+      >
+        <span className="text-primary/75">{icon}</span>
+        <span>{value || label}</span>
+        <ChevronDown className="size-3 text-muted-foreground/70" />
+      </button>
+      {open && (
+        <div className="absolute left-1/2 top-full z-50 mt-1 min-w-full -translate-x-1/2 rounded-lg border border-border/50 bg-popover p-1 shadow-xl">
+          {options.map((opt) => (
+            <button
+              key={opt}
+              type="button"
+              onClick={() => {
+                onChange(opt)
+                setOpen(false)
+              }}
+              className={`block w-full whitespace-nowrap rounded-md px-3 py-1.5 text-left text-[11px] transition-colors hover:bg-muted/40 ${
+                opt === value ? 'bg-primary/10 font-medium text-primary' : 'text-foreground'
+              }`}
+              role="option"
+              aria-selected={opt === value}
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TextCell({ value, placeholder, onChange, rows = 1 }: {
+  value: string
+  placeholder: string
+  onChange: (v: string) => void
+  rows?: number
+}) {
+  return (
+    <div className="group/textcell relative">
+      <textarea
+        value={value}
+        rows={rows}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => e.stopPropagation()}
+        placeholder={placeholder}
+        className="w-full resize-none rounded border-0 bg-transparent px-1 py-0.5 pr-6 text-[11px] leading-relaxed text-foreground placeholder:text-muted-foreground/25 focus:bg-muted/20 focus:outline-none"
+      />
+      <CopyButton
+        text={value}
+        iconOnly
+        title={`复制${placeholder}`}
+        className="absolute right-0.5 top-0.5 size-5 opacity-0 group-hover/textcell:opacity-100"
+      />
     </div>
   )
 }
@@ -259,6 +418,7 @@ function DescriptionCell({ row, onChange }: { row: StoryboardRow; onChange: (v: 
           <div className="mb-1 flex items-center gap-1.5">
             <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary/60">[0s-{row.duration}]</span>
             <span className="text-[10px] text-muted-foreground/40">输入 @ 引用本镜素材</span>
+            <CopyButton text={draft} iconOnly title="复制画面内容" className="ml-auto size-5" />
           </div>
         )}
         <textarea
@@ -297,18 +457,26 @@ function DescriptionCell({ row, onChange }: { row: StoryboardRow; onChange: (v: 
   }
 
   return (
-    <div
-      role="button"
-      onClick={() => { setDraft(row.description); setEditing(true) }}
-      className="min-h-[44px] w-full cursor-text rounded px-1 py-0.5 hover:bg-muted/20"
-    >
-      {row.description ? (
-        <p className="whitespace-pre-wrap break-words text-[12px] leading-relaxed">
-          {renderHighlighted(row.description)}
-        </p>
-      ) : (
-        <span className="text-[12px] text-muted-foreground/25">[0s-Xs] @场景名 画面描述...</span>
-      )}
+    <div className="group/desc relative">
+      <div
+        role="button"
+        onClick={() => { setDraft(row.description); setEditing(true) }}
+        className="min-h-[44px] w-full cursor-text rounded px-1 py-0.5 pr-7 hover:bg-muted/20"
+      >
+        {row.description ? (
+          <p className="whitespace-pre-wrap break-words text-[12px] leading-relaxed">
+            {renderHighlighted(row.description)}
+          </p>
+        ) : (
+          <span className="text-[12px] text-muted-foreground/25">[0s-Xs] @场景名 画面描述...</span>
+        )}
+      </div>
+      <CopyButton
+        text={row.description}
+        iconOnly
+        title="复制画面内容"
+        className="absolute right-0.5 top-0.5 size-5 opacity-0 group-hover/desc:opacity-100"
+      />
     </div>
   )
 }
@@ -319,11 +487,16 @@ function StoryboardNode({ id, data, selected }: StoryboardNodeProps) {
   const updateNodeData = useFlowStore((s) => s.updateNodeData)
   const deleteNode = useFlowStore((s) => s.deleteNode)
   const openMaterialPicker = useFlowStore((s) => s.openMaterialPicker)
+  const createStoryboardVideoGroups = useFlowStore((s) => s.createStoryboardVideoGroups)
   const allEdges = useFlowStore((s) => s.edges)
+  const allNodes = useFlowStore((s) => s.nodes)
 
   const [rows, setRows] = useState<StoryboardRow[]>(() => parseRows(data.content))
   const lastPersistedRef = useRef(data.content)
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
+  const [lastGroupResult, setLastGroupResult] = useState('')
+  const [videoRatio, setVideoRatio] = useState('9:16')
+  const [videoResolution, setVideoResolution] = useState('720p')
 
   useEffect(() => {
     if (data.content !== lastPersistedRef.current) {
@@ -416,15 +589,29 @@ function StoryboardNode({ id, data, selected }: StoryboardNodeProps) {
     updateRow(rowIdx, { propImages: imgs })
   }
 
-  // ── Right-side output ports (one per row, for connecting row → video gen) ──
-  const outputPorts = rows.map((_, i) => ({
-    id: `row-${i}`,
-    top: portTops[`row-${i}`] ?? `${((i + 0.5) / rows.length) * 100}%`,
-  }))
+  // ── Right-side output ports: one handle per storyboard row ──
+  const outputPorts = useMemo(() => {
+    return rows.map((_, i) => ({
+      id: `row-${i}`,
+      top: portTops[`row-${i}`] ?? `${((i + 0.5) / rows.length) * 100}%`,
+    }))
+  }, [portTops, rows])
 
   // Helper: find node IDs connected to a given handle
   const connectedTo = (handle: string) =>
     allEdges.filter((e) => e.target === id && e.targetHandle === handle).map((e) => e.source)
+
+  const uniqueIds = (ids: Array<string | undefined>) => Array.from(new Set(ids.filter((x): x is string => !!x)))
+
+  const inferAssetNodeIds = (prefix: '场景：' | '角色：' | '道具：', text: string) =>
+    allNodes
+      .filter((n) => n.data.type === 'image' && n.data.mode === 'result')
+      .filter((n) => {
+        const label = n.data.label as string
+        const name = assetNameFromLabel(label, prefix)
+        return name && text.includes(name)
+      })
+      .map((n) => n.id)
 
   return (
     <NodeBase
@@ -439,12 +626,69 @@ function StoryboardNode({ id, data, selected }: StoryboardNodeProps) {
       hasOutput={false}
       outputPorts={outputPorts}
       leftHandles={leftHandles}
-      width="w-[1040px]"
+      width="w-[1320px]"
       noPadding
     >
       {lightboxSrc && <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />}
 
       <div className="nodrag nopan overflow-x-auto" onPointerDown={(e) => e.stopPropagation()}>
+        <div className="sticky left-0 z-10 mb-2 flex min-w-[980px] items-center justify-between gap-2 rounded-xl border border-border/30 bg-background/95 px-3 py-2 backdrop-blur">
+          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            <Film className="size-3.5 text-primary/70" />
+            <span>多镜头视频段</span>
+            {lastGroupResult && <span className="text-emerald-500">{lastGroupResult}</span>}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <VideoSettingChip
+              value={videoRatio}
+              options={VIDEO_RATIOS}
+              label="比例"
+              icon={<Ratio className="size-3" />}
+              onChange={setVideoRatio}
+            />
+            <VideoSettingChip
+              value={videoResolution}
+              options={VIDEO_RESOLUTIONS}
+              label="分辨率"
+              icon={<Monitor className="size-3" />}
+              onChange={setVideoResolution}
+            />
+            <button
+              onClick={() => {
+                const count = createStoryboardVideoGroups(id, {
+                  maxDuration: 15,
+                  modelLabel: 'Seedance 2.0',
+                  modelId: 'doubao-seedance-2-0-260128',
+                  ratio: videoRatio,
+                  resolution: videoResolution,
+                })
+                setLastGroupResult(count > 0 ? `已创建 ${count} 个视频段` : '暂无可分组镜头')
+              }}
+              className="flex items-center gap-1 rounded-full border border-sky-500/30 px-2.5 py-1 text-[11px] font-medium text-sky-400 transition-colors hover:bg-sky-500/10"
+              title={`按15秒上限自动分组，预计${countVideoGroups(rows, 15)}段`}
+            >
+              <Film className="size-3" />
+              Seedance 2.0 · 15s
+            </button>
+            <button
+              onClick={() => {
+                const count = createStoryboardVideoGroups(id, {
+                  maxDuration: 30,
+                  modelLabel: 'Seedance 2.5',
+                  modelId: 'doubao-seedance-2-5-260628',
+                  ratio: videoRatio,
+                  resolution: videoResolution,
+                })
+                setLastGroupResult(count > 0 ? `已创建 ${count} 个视频段` : '暂无可分组镜头')
+              }}
+              className="flex items-center gap-1 rounded-full border border-emerald-500/30 px-2.5 py-1 text-[11px] font-medium text-emerald-400 transition-colors hover:bg-emerald-500/10"
+              title={`按30秒上限自动分组，预计${countVideoGroups(rows, 30)}段`}
+            >
+              <Film className="size-3" />
+              Seedance 2.5 · 30s
+            </button>
+          </div>
+        </div>
         <table className="w-full border-collapse text-[12px]">
           <thead>
             <tr className="bg-muted/50 text-muted-foreground">
@@ -453,6 +697,9 @@ function StoryboardNode({ id, data, selected }: StoryboardNodeProps) {
               <th className="w-[96px] border border-border px-1 py-2 text-center font-medium">场景图</th>
               <th className="w-[96px] border border-border px-1 py-2 text-center font-medium">角色</th>
               <th className="w-[96px] border border-border px-1 py-2 text-center font-medium">道具</th>
+              <th className="w-[112px] border border-border px-2 py-2 text-left font-medium">站位</th>
+              <th className="w-[132px] border border-border px-2 py-2 text-left font-medium">动作/表情</th>
+              <th className="w-[132px] border border-border px-2 py-2 text-left font-medium">机位/构图</th>
               <th className="w-[56px] border border-border px-1 py-2 text-center font-medium">景别</th>
               <th className="w-[56px] border border-border px-1 py-2 text-center font-medium">运镜</th>
               <th className="min-w-[100px] border border-border px-2 py-2 text-left font-medium">旁白</th>
@@ -461,16 +708,25 @@ function StoryboardNode({ id, data, selected }: StoryboardNodeProps) {
           </thead>
           <tbody>
             {rows.map((row, i) => {
+              const rowText = rowAssetSearchText(row)
               // Scene: only live edges (removing an edge immediately hides the chip)
-              const sceneNodeIds = connectedTo(`scene-in-${i}`)
+              const sceneNodeIds = uniqueIds([...connectedTo(`scene-in-${i}`), row.sceneNodeId, ...inferAssetNodeIds('场景：', rowText)])
 
               // Characters: live edges only; also scan extra slots beyond stored count
               const maxCharSlots = Math.max((row.characters ?? []).length, (row.characterNodeIds ?? []).length, 3)
-              const charNodeIds = Array.from({ length: maxCharSlots }, (_, j) => connectedTo(`char-in-${i}-${j}`)).flat()
+              const charNodeIds = uniqueIds([
+                ...Array.from({ length: maxCharSlots }, (_, j) => connectedTo(`char-in-${i}-${j}`)).flat(),
+                ...(row.characterNodeIds ?? []),
+                ...inferAssetNodeIds('角色：', rowText),
+              ])
 
               // Props: live edges only; scan extra slots
               const maxPropSlots = Math.max((row.propNodeIds ?? []).length, 3)
-              const propNids = Array.from({ length: maxPropSlots }, (_, j) => connectedTo(`prop-in-${i}-${j}`)).flat()
+              const propNids = uniqueIds([
+                ...Array.from({ length: maxPropSlots }, (_, j) => connectedTo(`prop-in-${i}-${j}`)).flat(),
+                ...(row.propNodeIds ?? []),
+                ...inferAssetNodeIds('道具：', rowText),
+              ])
 
               return (
                 <tr
@@ -479,7 +735,12 @@ function StoryboardNode({ id, data, selected }: StoryboardNodeProps) {
                   className="group/row transition-colors hover:bg-muted/10"
                 >
                   {/* 镜号 */}
-                  <td className="border border-border px-2 py-1.5 text-center font-bold text-primary/60">{i + 1}</td>
+                  <td className="border border-border px-2 py-1.5 text-center">
+                    <div className="flex flex-col items-center gap-1">
+                      <span className="font-bold text-primary/60">{i + 1}</span>
+                      <CopyButton text={storyboardRowToText(row, i)} iconOnly title="复制整条分镜" className="size-5" />
+                    </div>
+                  </td>
 
                   {/* 画面内容 */}
                   <td className="border border-border px-2 py-1">
@@ -582,6 +843,48 @@ function StoryboardNode({ id, data, selected }: StoryboardNodeProps) {
                     </div>
                   </td>
 
+                  {/* 站位 */}
+                  <td className="border border-border px-2 py-1">
+                    <TextCell
+                      value={row.blocking ?? ''}
+                      placeholder="角色站位/相对距离"
+                      onChange={(v) => updateRow(i, { blocking: v })}
+                      rows={2}
+                    />
+                  </td>
+
+                  {/* 动作/表情 */}
+                  <td className="border border-border px-2 py-1">
+                    <div className="space-y-1">
+                      <TextCell
+                        value={row.action ?? ''}
+                        placeholder="动作"
+                        onChange={(v) => updateRow(i, { action: v })}
+                      />
+                      <TextCell
+                        value={row.expression ?? ''}
+                        placeholder="表情/情绪"
+                        onChange={(v) => updateRow(i, { expression: v })}
+                      />
+                    </div>
+                  </td>
+
+                  {/* 机位/构图 */}
+                  <td className="border border-border px-2 py-1">
+                    <div className="space-y-1">
+                      <TextCell
+                        value={row.cameraAngle ?? ''}
+                        placeholder="机位/角度"
+                        onChange={(v) => updateRow(i, { cameraAngle: v })}
+                      />
+                      <TextCell
+                        value={row.composition ?? ''}
+                        placeholder="构图/主体位置"
+                        onChange={(v) => updateRow(i, { composition: v })}
+                      />
+                    </div>
+                  </td>
+
                   {/* 景别 */}
                   <td className="border border-border px-1 py-1">
                     <DropdownCell value={row.shotType || ''} options={SHOT_TYPES} placeholder="景别" onChange={(v) => updateRow(i, { shotType: v })} />
@@ -594,13 +897,16 @@ function StoryboardNode({ id, data, selected }: StoryboardNodeProps) {
 
                   {/* 旁白 */}
                   <td className="border border-border px-2 py-1">
-                    <input
-                      value={row.dialogue}
-                      onChange={(e) => updateRow(i, { dialogue: e.target.value })}
-                      onKeyDown={(e) => e.stopPropagation()}
-                      placeholder="台词/旁白"
-                      className="w-full rounded border-0 bg-transparent px-1 py-0.5 text-[11px] text-foreground placeholder:text-muted-foreground/25 focus:bg-muted/20 focus:outline-none"
-                    />
+                    <div className="group/dialogue relative">
+                      <input
+                        value={row.dialogue}
+                        onChange={(e) => updateRow(i, { dialogue: e.target.value })}
+                        onKeyDown={(e) => e.stopPropagation()}
+                        placeholder="台词/旁白"
+                        className="w-full rounded border-0 bg-transparent px-1 py-0.5 pr-6 text-[11px] text-foreground placeholder:text-muted-foreground/25 focus:bg-muted/20 focus:outline-none"
+                      />
+                      <CopyButton text={row.dialogue} iconOnly title="复制台词/旁白" className="absolute right-0 top-0 size-5 opacity-0 group-hover/dialogue:opacity-100" />
+                    </div>
                   </td>
 
                   {/* 删除行 */}

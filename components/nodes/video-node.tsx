@@ -14,6 +14,7 @@ import { useModels } from '@/hooks/use-models'
 import { useConnectedPrompt } from '@/hooks/use-connected-prompt'
 import { saveToLibrary, extractVideoThumbnail } from '@/lib/save-to-library'
 import { getStoryboardRowData, type NamedAsset } from '@/lib/storyboard-utils'
+import { CopyButton } from '@/components/copy-button'
 
 
 type Tab = 'prompt' | 'text2video' | 'ref' | 'firstlast' | 'extend'
@@ -220,6 +221,11 @@ function RefPromptView({
   sourceLabel,
   shotType,
   camera,
+  blocking,
+  action,
+  expression,
+  cameraAngle,
+  composition,
   onOpenPicker,
   onDisconnect,
 }: {
@@ -228,6 +234,11 @@ function RefPromptView({
   sourceLabel: string
   shotType?: string
   camera?: string
+  blocking?: string
+  action?: string
+  expression?: string
+  cameraAngle?: string
+  composition?: string
   onOpenPicker: (nodeId: string) => void
   onDisconnect: () => void
 }) {
@@ -254,14 +265,17 @@ function RefPromptView({
           <Link2 className="size-3" />
           来自「{sourceLabel}」
         </span>
-        <button
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => { e.stopPropagation(); onDisconnect() }}
-          className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-        >
-          <Unlink className="size-2.5" />
-          断开
-        </button>
+        <div className="flex items-center gap-1">
+          <CopyButton text={text} iconOnly title="复制接入提示词" />
+          <button
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onDisconnect() }}
+            className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+          >
+            <Unlink className="size-2.5" />
+            断开
+          </button>
+        </div>
       </div>
       <div className="max-h-[160px] overflow-y-auto rounded-lg border border-border/30 bg-muted/20 px-2.5 py-2 text-[12.5px] leading-[1.75]">
         {segments.map((seg, i) => {
@@ -297,8 +311,8 @@ function RefPromptView({
           )
         })}
       </div>
-      {/* 景别 + 运镜参数行 */}
-      {(shotType || camera) && (
+      {/* 专业分镜参数 */}
+      {(shotType || camera || blocking || action || expression || cameraAngle || composition) && (
         <div className="flex flex-wrap gap-1">
           {shotType && (
             <span className="inline-flex items-center gap-1 rounded-md bg-violet-500/10 border border-violet-500/20 px-1.5 py-0.5 text-[11px] font-medium text-violet-400">
@@ -310,6 +324,31 @@ function RefPromptView({
               运镜：{camera}
             </span>
           )}
+          {blocking && (
+            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 text-[11px] font-medium text-emerald-400">
+              站位：{blocking}
+            </span>
+          )}
+          {action && (
+            <span className="inline-flex items-center gap-1 rounded-md bg-orange-500/10 border border-orange-500/20 px-1.5 py-0.5 text-[11px] font-medium text-orange-400">
+              动作：{action}
+            </span>
+          )}
+          {expression && (
+            <span className="inline-flex items-center gap-1 rounded-md bg-pink-500/10 border border-pink-500/20 px-1.5 py-0.5 text-[11px] font-medium text-pink-400">
+              表情：{expression}
+            </span>
+          )}
+          {cameraAngle && (
+            <span className="inline-flex items-center gap-1 rounded-md bg-cyan-500/10 border border-cyan-500/20 px-1.5 py-0.5 text-[11px] font-medium text-cyan-400">
+              机位：{cameraAngle}
+            </span>
+          )}
+          {composition && (
+            <span className="inline-flex items-center gap-1 rounded-md bg-lime-500/10 border border-lime-500/20 px-1.5 py-0.5 text-[11px] font-medium text-lime-400">
+              构图：{composition}
+            </span>
+          )}
         </div>
       )}
     </div>
@@ -319,15 +358,22 @@ function RefPromptView({
 // ─── Tool node ────────────────────────────────────────────────────────────────
 function VideoToolNode({ id, data, selected }: VideoNodeProps) {
   const [tab, setTab] = useState<Tab>('prompt')
-  const [ratio, setRatio] = useState<Ratio>('16:9')
-  const [resolution, setResolution] = useState<Resolution>('720p')
+  const initialMeta = useMemo(() => {
+    try {
+      return data.meta
+        ? JSON.parse(data.meta as string) as { duration?: number; ratio?: Ratio; resolution?: Resolution; modelId?: string }
+        : {}
+    } catch { return {} }
+  }, [data.meta])
+  const [ratio, setRatio] = useState<Ratio>(initialMeta.ratio ?? '16:9')
+  const [resolution, setResolution] = useState<Resolution>(initialMeta.resolution ?? '720p')
   const [durationMode, setDurationMode] = useState<DurationMode>('manual')
-  const [duration, setDuration] = useState(5)
+  const [duration, setDuration] = useState(initialMeta.duration ?? 5)
   const [genCount, setGenCount] = useState(1)
   const [isGenerating, setIsGenerating] = useState(false)
   const [inputCreated, setInputCreated] = useState<Partial<Record<Tab, boolean>>>({})
   const refCount = useFlowStore((s) => s.edges.filter((e) => e.target === id && e.targetHandle === TAB_HANDLES.ref).length)
-  const [prompt, setPrompt] = useState<string>('')
+  const [prompt, setPrompt] = useState<string>((data.content as string) || '')
   const [isOptimizing, setIsOptimizing] = useState(false)
   const connectedPrompt = useConnectedPrompt(id)
   const effectivePrompt = connectedPrompt ? connectedPrompt.text : prompt
@@ -343,14 +389,63 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
   const [selectedModel, setSelectedModel] = useState<string>('')
   useEffect(() => {
     if (videoModels.length > 0 && !selectedModel) {
-      setSelectedModel(videoModels[0].id)
+      const metaModel = initialMeta.modelId
+      const preferredModel = metaModel && videoModels.some((m) => m.id === metaModel)
+        ? metaModel
+        : videoModels[0].id
+      setSelectedModel(preferredModel)
     }
-  }, [videoModels, selectedModel])
+  }, [videoModels, selectedModel, initialMeta.modelId])
+  const selectedModelMaxDuration = useMemo(() => {
+    const modelId = selectedModel || initialMeta.modelId || ''
+    if (modelId.includes('seedance-2-5')) return 30
+    if (modelId.includes('seedance-2-0-fast')) return 10
+    if (modelId.includes('seedance-1-0-pro-fast')) return 5
+    if (modelId.includes('seedance-1-0-pro')) return 10
+    if (modelId.includes('cogvideo')) return 6
+    return 15
+  }, [selectedModel, initialMeta.modelId])
+  const durationOptions = useMemo(() => {
+    const base = [4, 5, 6, 8, 10, 12, 15, 20, 25, 30]
+    return base.filter((seconds) => seconds <= selectedModelMaxDuration)
+  }, [selectedModelMaxDuration])
+  useEffect(() => {
+    if (durationMode === 'manual' && duration > selectedModelMaxDuration) {
+      setDuration(selectedModelMaxDuration)
+    }
+  }, [duration, durationMode, selectedModelMaxDuration])
 
   // ── 自动从分镜表读取时长
   const allEdges = useFlowStore((s) => s.edges)
   const allNodes = useFlowStore((s) => s.nodes)
   useEffect(() => {
+    const parseShotSeconds = (value?: string) => {
+      if (!value) return 0
+      const match = value.match(/(\d+(?:\.\d+)?)/)
+      return match ? Number(match[1]) : 0
+    }
+    const storyboardRowEdges = allEdges.filter((e) => {
+      if (e.target !== id || !e.sourceHandle?.startsWith('row-')) return false
+      if (e.targetHandle !== PROMPT_HANDLE && e.targetHandle !== TAB_HANDLES.ref && e.targetHandle !== TAB_HANDLES.firstlast) return false
+      const srcNode = allNodes.find((n) => n.id === e.source)
+      return srcNode?.data.type === 'storyboard'
+    })
+    if (storyboardRowEdges.length > 1) {
+      const metaDuration = initialMeta.duration
+      const summedDuration = storyboardRowEdges.reduce((sum, edge) => {
+        const srcNode = allNodes.find((n) => n.id === edge.source)
+        if (!srcNode) return sum
+        const sbRow = getStoryboardRowData(srcNode as Node<CustomNodeData>, edge.sourceHandle ?? undefined)
+        return sum + parseShotSeconds(sbRow?.duration)
+      }, 0)
+      const nextDuration = metaDuration && metaDuration > 0 ? metaDuration : Math.round(summedDuration)
+      if (nextDuration > 0) {
+        setDuration(nextDuration)
+        setDurationMode('manual')
+      }
+      return
+    }
+
     const edge = allEdges.find(
       (e) => e.target === id && (e.targetHandle === PROMPT_HANDLE || e.targetHandle === TAB_HANDLES.ref || e.targetHandle === TAB_HANDLES.firstlast),
     )
@@ -365,7 +460,7 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
         setDurationMode('manual')
       }
     }
-  }, [id, allEdges, allNodes])
+  }, [id, allEdges, allNodes, initialMeta.duration])
 
   // Named assets from connected storyboard row — drives @mention chip rendering
   const storyboardRowAssets = useMemo(() => {
@@ -596,6 +691,7 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
       graphic: '参考平面',
       graphicBrief: '参考创意方案',
       episodeList: '参考剧集列表',
+      videoSynthesis: '参考成片',
       group: '参考分组',
     }
     addInputNode(
@@ -665,7 +761,7 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
 
       const ratioMap: Record<Ratio, string> = {
         '21:9': '21:9', '16:9': '16:9', '4:3': '4:3',
-        '1:1': '1:1', '3:4': '3:4', '9:16': '9:16', 'auto': '16:9',
+        '1:1': '1:1', '3:4': '3:4', '9:16': '9:16', 'auto': 'adaptive',
       }
 
       // 收集全能参考模式的 @素材引用 + 分镜表自动引用
@@ -692,13 +788,18 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
         }
       }
 
-      // Augment prompt with shotType / camera from storyboard row if not already in text
+      // Augment prompt with structured storyboard fields if not already in text
       let finalPrompt = effectivePrompt
       if (storyboardRowAssets) {
-        const { shotType: st, camera: cam } = storyboardRowAssets
+        const { shotType: st, camera: cam, blocking, action, expression, cameraAngle, composition } = storyboardRowAssets
         const extras: string[] = []
         if (st && !effectivePrompt.includes(st)) extras.push(`景别：${st}`)
         if (cam && !effectivePrompt.includes(cam)) extras.push(`运镜：${cam}`)
+        if (blocking && !effectivePrompt.includes(blocking)) extras.push(`站位：${blocking}`)
+        if (action && !effectivePrompt.includes(action)) extras.push(`动作：${action}`)
+        if (expression && !effectivePrompt.includes(expression)) extras.push(`表情：${expression}`)
+        if (cameraAngle && !effectivePrompt.includes(cameraAngle)) extras.push(`机位：${cameraAngle}`)
+        if (composition && !effectivePrompt.includes(composition)) extras.push(`构图：${composition}`)
         if (extras.length > 0) finalPrompt = `${effectivePrompt.trimEnd()}\n${extras.join('，')}`
       }
 
@@ -711,6 +812,7 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
           prompt: finalPrompt,
           duration: durationMode === 'manual' ? duration : undefined,
           resolution: resolution === '720p' ? '720p' : resolution,
+          ratio: ratioMap[ratio],
           firstFrameImage,
           lastFrameImage,
           references,
@@ -867,6 +969,11 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
               sourceLabel={connectedPrompt.label}
               shotType={storyboardRowAssets.shotType}
               camera={storyboardRowAssets.camera}
+              blocking={storyboardRowAssets.blocking}
+              action={storyboardRowAssets.action}
+              expression={storyboardRowAssets.expression}
+              cameraAngle={storyboardRowAssets.cameraAngle}
+              composition={storyboardRowAssets.composition}
               onOpenPicker={openMaterialPicker}
               onDisconnect={() => { setPrompt(connectedPrompt.text); connectedPrompt.disconnect() }}
             />
@@ -891,6 +998,12 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
             </>
           )}
           <div className={cn('relative flex-1', connectedPrompt && storyboardRowAssets && 'hidden')}>
+            <CopyButton
+              text={connectedPrompt ? connectedPrompt.text : prompt}
+              iconOnly
+              title="复制提示词"
+              className="absolute right-7 bottom-1.5 z-10"
+            />
             <textarea
               ref={promptTextareaRef}
               value={connectedPrompt ? connectedPrompt.text : prompt}
@@ -985,10 +1098,7 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
           value={durationMode === 'smart' ? 'smart' : String(duration)}
           options={[
             { id: 'smart', label: '智能时长' },
-            { id: '4', label: '4s' }, { id: '5', label: '5s' },
-            { id: '6', label: '6s' }, { id: '8', label: '8s' },
-            { id: '10', label: '10s' }, { id: '12', label: '12s' },
-            { id: '15', label: '15s' },
+            ...durationOptions.map((seconds) => ({ id: String(seconds), label: `${seconds}s` })),
           ]}
           renderValue={(v) => v === 'smart' ? '智能' : `${v}s`}
           onSelect={(v) => {
@@ -1078,7 +1188,8 @@ function OptionChip({
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
-      if (!btnRef.current?.contains(e.target as Node) && !dropRef.current?.contains(e.target as Node))
+      const target = e.target instanceof window.Node ? e.target : null
+      if (target && !btnRef.current?.contains(target) && !dropRef.current?.contains(target))
         setOpen(false)
     }
     const id = window.setTimeout(() => document.addEventListener('mousedown', handler), 0)

@@ -10,6 +10,7 @@ import {
 import { CustomNodeData, useFlowStore } from '@/lib/store'
 import { NodeBase } from './node-base'
 import { cn } from '@/lib/utils'
+import { CopyButton } from '@/components/copy-button'
 
 type VideoSynthesisNodeProps = NodeProps<Node<CustomNodeData>>
 
@@ -130,6 +131,7 @@ function VideoSynthesisNode({ id, data, selected }: VideoSynthesisNodeProps) {
 
       {/* Prompt */}
       <div className="relative">
+        <CopyButton text={prompt} iconOnly title="复制提示词" className="absolute right-8 bottom-5 z-10" />
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}

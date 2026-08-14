@@ -46,6 +46,7 @@ export const MODELS: ModelInfo[] = [
   { id: 'cogview-4',     name: 'CogView-4',         type: 'image', provider: 'zhipu',    description: '智谱生图 · 中文理解力强',          tags: [],       capabilities: { maxResolution: '1024x1024' } },
 
   // ── 视频模型 ──
+  { id: 'doubao-seedance-2-5-260628',    name: '即梦 Seedance 2.5',      type: 'video', provider: 'volces', description: '新一代视频生成 · 长叙事 · 4–30s',     tags: ['最新'], capabilities: { maxDuration: 30, supportedRatios: ['21:9','16:9','4:3','1:1','3:4','9:16'], maxResolution: '720p' } },
   { id: 'doubao-seedance-2-0-260128',    name: '即梦 Seedance 2.0',      type: 'video', provider: 'volces', description: '旗舰视频生成 · 高画质 · 多模态',     tags: ['旗舰'], capabilities: { maxDuration: 15 } },
   { id: 'doubao-seedance-2-0-fast-260128', name: '即梦 Seedance 2.0 Fast', type: 'video', provider: 'volces', description: '快速出片 · 标准画质 · 3–10s',     tags: ['快速'], capabilities: { maxDuration: 10 } },
   { id: 'doubao-seedance-1-5-pro-251215',  name: '即梦 Seedance 1.5 Pro',  type: 'video', provider: 'volces', description: '稳定输出 · 首尾帧 · 3–15s',       tags: [],       capabilities: { maxDuration: 15 } },

@@ -48,6 +48,7 @@ export interface VideoGenRequest {
   negativePrompt?: string
   duration?: number
   resolution?: string
+  ratio?: string
   /** 首帧图片 */
   firstFrameImage?: string
   /** 尾帧图片 */

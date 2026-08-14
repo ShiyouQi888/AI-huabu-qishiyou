@@ -3,7 +3,7 @@
  *
  * 视频生成接口（异步任务）。
  *
- * Body: { model, prompt, negativePrompt?, duration?, resolution?, firstFrameImage?, lastFrameImage?, referenceVideo? }
+ * Body: { model, prompt, negativePrompt?, duration?, resolution?, ratio?, firstFrameImage?, lastFrameImage?, referenceVideo? }
  * Response: { taskId, status, estimatedSeconds? }
  *
  * GET /api/generate/video?taskId=xxx
@@ -37,6 +37,7 @@ export async function POST(request: Request) {
       negativePrompt?: string
       duration?: number
       resolution?: string
+      ratio?: string
       firstFrameImage?: string
       lastFrameImage?: string
       referenceVideo?: string
@@ -53,6 +54,7 @@ export async function POST(request: Request) {
       negativePrompt: body.negativePrompt,
       duration: body.duration,
       resolution: body.resolution,
+      ratio: body.ratio,
       firstFrameImage: body.firstFrameImage,
       lastFrameImage: body.lastFrameImage,
       referenceVideo: body.referenceVideo,

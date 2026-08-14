@@ -5,6 +5,7 @@ import { NodeProps, Node } from '@xyflow/react'
 import { Clapperboard, Camera, Clock, MessageSquare, ChevronDown, ChevronRight, Users, Timer } from 'lucide-react'
 import { CustomNodeData, useFlowStore } from '@/lib/store'
 import { NodeBase } from './node-base'
+import { CopyButton } from '@/components/copy-button'
 
 interface SceneData {
   sceneIndex: number
@@ -97,6 +98,14 @@ function SceneNode({ id, data, selected }: SceneNodeProps) {
   const update = (patch: Partial<SceneData>) => persist({ ...scene, ...patch })
 
   const hasContent = scene.description.trim()
+  const sceneText = [
+    `场景 ${scene.sceneIndex}`,
+    scene.description ? `画面：${scene.description}` : '',
+    scene.dialogue ? `台词/旁白：${scene.dialogue}` : '',
+    scene.duration ? `时长：${scene.duration}` : '',
+    scene.camera ? `运镜/构图：${scene.camera}` : '',
+    scene.negativePrompt ? `负向提示词：${scene.negativePrompt}` : '',
+  ].filter(Boolean).join('\n')
 
   return (
     <NodeBase
@@ -133,6 +142,7 @@ function SceneNode({ id, data, selected }: SceneNodeProps) {
           onClick={() => setCollapsed(false)}
           onPointerDown={(e) => e.stopPropagation()}
         >
+          <CopyButton text={sceneText} iconOnly title="复制场景内容" className="absolute right-1.5 top-1.5 z-10" />
           {hasTimeline ? (
             <div className="space-y-1">
               {timeline.slice(0, 2).map((seg, i) => (
@@ -164,7 +174,8 @@ function SceneNode({ id, data, selected }: SceneNodeProps) {
         <>
           {/* Timeline visual / Description */}
           {editingDesc || !hasTimeline ? (
-            <div className="nodrag nopan rounded-xl border border-border/40 bg-muted/20 transition-colors focus-within:border-primary/60 focus-within:ring-1 focus-within:ring-primary/20">
+            <div className="nodrag nopan relative rounded-xl border border-border/40 bg-muted/20 transition-colors focus-within:border-primary/60 focus-within:ring-1 focus-within:ring-primary/20">
+              <CopyButton text={scene.description} iconOnly title="复制画面描述" className="absolute right-1.5 top-1.5 z-10" />
               <textarea
                 ref={textareaRef}
                 value={scene.description}
@@ -175,15 +186,16 @@ function SceneNode({ id, data, selected }: SceneNodeProps) {
                 placeholder="[0s-3s] @角色名 描述画面动作... [3s-5s] 下一个时间段..."
                 rows={1}
                 autoFocus={editingDesc}
-                className="nodrag nopan block w-full resize-none bg-transparent px-3 py-2.5 text-[13px] leading-relaxed text-foreground placeholder:text-muted-foreground/40 focus:outline-none"
+                className="nodrag nopan block w-full resize-none bg-transparent px-3 py-2.5 pr-8 text-[13px] leading-relaxed text-foreground placeholder:text-muted-foreground/40 focus:outline-none"
               />
             </div>
           ) : (
             <div
-              className="nodrag nopan cursor-text rounded-xl border border-border/40 bg-muted/20 px-3 py-2.5 transition-colors hover:border-border/60"
+              className="nodrag nopan relative cursor-text rounded-xl border border-border/40 bg-muted/20 px-3 py-2.5 transition-colors hover:border-border/60"
               onClick={() => setEditingDesc(true)}
               onPointerDown={(e) => e.stopPropagation()}
             >
+              <CopyButton text={scene.description} iconOnly title="复制画面描述" className="absolute right-1.5 top-1.5 z-10" />
               {/* Timeline bar */}
               <div className="mb-2 flex items-center gap-1">
                 <Timer className="size-3 text-violet-400/60" />
@@ -210,8 +222,9 @@ function SceneNode({ id, data, selected }: SceneNodeProps) {
 
           {/* Dialogue */}
           {(scene.dialogue || editing === 'dialogue') ? (
-            <div className="mt-2 flex items-start gap-2 rounded-lg border border-border/30 bg-muted/10 px-2.5 py-2">
+            <div className="relative mt-2 flex items-start gap-2 rounded-lg border border-border/30 bg-muted/10 px-2.5 py-2 pr-8">
               <MessageSquare className="mt-0.5 size-3 shrink-0 text-muted-foreground/50" />
+              <CopyButton text={scene.dialogue} iconOnly title="复制台词/旁白" className="absolute right-1.5 top-1.5 z-10" />
               <input
                 value={scene.dialogue}
                 onChange={(e) => update({ dialogue: e.target.value })}
@@ -236,8 +249,9 @@ function SceneNode({ id, data, selected }: SceneNodeProps) {
 
           {/* Negative prompt */}
           {(scene.negativePrompt || editing === 'negative') ? (
-            <div className="mt-2 flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-2.5 py-2">
+            <div className="relative mt-2 flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-2.5 py-2 pr-8">
               <span className="mt-0.5 shrink-0 text-[10px] font-bold text-amber-500/50">排除</span>
+              <CopyButton text={scene.negativePrompt} iconOnly title="复制负向提示词" className="absolute right-1.5 top-1.5 z-10" />
               <input
                 value={scene.negativePrompt || ''}
                 onChange={(e) => update({ negativePrompt: e.target.value })}
@@ -262,8 +276,9 @@ function SceneNode({ id, data, selected }: SceneNodeProps) {
           {/* Duration + Camera row */}
           <div className="mt-2 flex gap-2">
             {scene.outputMode !== 'image' && (
-              <div className="flex flex-1 items-center gap-1.5 rounded-lg border border-border/30 bg-muted/10 px-2.5 py-1.5">
+              <div className="relative flex flex-1 items-center gap-1.5 rounded-lg border border-border/30 bg-muted/10 px-2.5 py-1.5 pr-7">
                 <Clock className="size-3 shrink-0 text-muted-foreground/50" />
+                <CopyButton text={scene.duration} iconOnly title="复制时长" className="absolute right-1 top-1/2 -translate-y-1/2 size-5" />
                 <input
                   value={scene.duration}
                   onChange={(e) => update({ duration: e.target.value })}
@@ -274,8 +289,9 @@ function SceneNode({ id, data, selected }: SceneNodeProps) {
                 />
               </div>
             )}
-            <div className="flex flex-1 items-center gap-1.5 rounded-lg border border-border/30 bg-muted/10 px-2.5 py-1.5">
+            <div className="relative flex flex-1 items-center gap-1.5 rounded-lg border border-border/30 bg-muted/10 px-2.5 py-1.5 pr-7">
               <Camera className="size-3 shrink-0 text-muted-foreground/50" />
+              <CopyButton text={scene.camera} iconOnly title="复制运镜/构图" className="absolute right-1 top-1/2 -translate-y-1/2 size-5" />
               <input
                 value={scene.camera}
                 onChange={(e) => update({ camera: e.target.value })}

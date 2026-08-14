@@ -11,20 +11,26 @@
 import { NextResponse } from 'next/server'
 import { MODELS, getModelsByType } from '@/lib/services/ai/index'
 import { getAllConfigs, getProviderForModel } from '@/lib/services/ai/config'
+import type { ModelInfo } from '@/lib/services/ai/types'
+
+const MODEL_TYPES = new Set<ModelInfo['type']>(['text', 'image', 'video', 'audio'])
 
 export async function GET(request: Request) {
   // 构建 Provider 启用状态 map
   const providerEnabled = new Map<string, boolean>()
   const disabledSet = new Set<string>()
   for (const cfg of getAllConfigs()) {
-    providerEnabled.set(cfg.id, cfg.enabled)
+    if (cfg.id) providerEnabled.set(cfg.id, cfg.enabled)
     for (const m of cfg.disabledModels ?? []) {
       disabledSet.add(m)
     }
   }
 
   const { searchParams } = new URL(request.url)
-  const type = searchParams.get('type')
+  const requestedType = searchParams.get('type')
+  const type = requestedType && MODEL_TYPES.has(requestedType as ModelInfo['type'])
+    ? requestedType as ModelInfo['type']
+    : null
 
   const allModels = type ? getModelsByType(type) : MODELS
   // 只过滤掉用户在设置中手动禁用的模型，不过滤未配置 API 密钥的 Provider

@@ -114,7 +114,43 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-size: 15px;
   }
+}
+
+/* ─── App readability scale ─────────────────────────────── */
+body [class*="text-[7px]"] {
+  font-size: 9px;
+}
+body [class*="text-[8px]"] {
+  font-size: 10px;
+}
+body [class*="text-[9px]"],
+body [class*="text-[9.5px]"] {
+  font-size: 11px;
+}
+body [class*="text-[10px]"] {
+  font-size: 12px;
+}
+body [class*="text-[11px]"],
+body .text-xs {
+  font-size: 12px;
+}
+body [class*="text-[12px]"] {
+  font-size: 13px;
+}
+body [class*="text-[13px]"],
+body .text-sm {
+  font-size: 14px;
+}
+body [class*="text-[14px]"] {
+  font-size: 15px;
+}
+body [class*="text-[15px]"] {
+  font-size: 16px;
+}
+body [class*="text-[16px]"] {
+  font-size: 17px;
 }
 
 /* ─── React Flow ─────────────────────────────────────────── */
@@ -187,19 +223,60 @@
 }
 
 .react-flow__handle {
+  --handle-translate-x: 0;
+  --handle-translate-y: 0;
+  --handle-scale: 1;
   opacity: 0;
-  transition: opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+  transition: opacity 0.15s ease;
+  transform: translate(var(--handle-translate-x), var(--handle-translate-y)) !important;
+  transform-origin: center;
   background: var(--edge-color) !important;
   border: 2px solid var(--background) !important;
   width: 12px !important;
   height: 12px !important;
+}
+.react-flow__handle-left {
+  --handle-translate-x: -50%;
+  --handle-translate-y: -50%;
+}
+.react-flow__handle-right {
+  --handle-translate-x: 50%;
+  --handle-translate-y: -50%;
+}
+.react-flow__handle-top {
+  --handle-translate-x: -50%;
+  --handle-translate-y: -50%;
+}
+.react-flow__handle-bottom {
+  --handle-translate-x: -50%;
+  --handle-translate-y: 50%;
+}
+.react-flow__handle::before {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 999px;
+}
+.react-flow__handle::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: inherit;
+  border: inherit;
+  transform: scale(var(--handle-scale));
+  transform-origin: center;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 .react-flow__node:hover .react-flow__handle,
 .react-flow__node.selected .react-flow__handle {
   opacity: 1;
 }
 .react-flow__handle:hover {
-  transform: scale(1.5);
+  --handle-scale: 1.5;
+}
+.react-flow__handle:hover::after {
   box-shadow: 0 0 0 4px color-mix(in oklch, var(--edge-color) 25%, transparent);
 }
 

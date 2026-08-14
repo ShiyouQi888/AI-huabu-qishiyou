@@ -7,10 +7,134 @@ export type ContentType =
 
 export interface PromptPair { system: string; user: string }
 
+export interface ShortDramaStoryBible {
+  title?: string
+  synopsis?: string
+  firstHook?: string
+  storyBible?: {
+    logline?: string
+    audience?: string
+    emotionalPromise?: string
+    coreConflict?: string
+    world?: string
+    protagonistArc?: string
+    antagonistPressure?: string
+    relationshipEngine?: string
+    visualStyle?: string
+    taboo?: string[]
+    mustKeep?: string[]
+  }
+  characters?: Array<{ name: string; role?: string; appearance?: string; personality?: string; arc?: string; desire?: string; secret?: string }>
+  content?: string
+}
+
+export interface DramaQualityReport {
+  totalScore?: number
+  verdict?: string
+  scores?: {
+    hook?: number
+    satisfactionDensity?: number
+    reversal?: number
+    motivation?: number
+    cliffhanger?: number
+    dialogue?: number
+    producibility?: number
+    consistency?: number
+  }
+  strengths?: string[]
+  risks?: string[]
+  rewriteSuggestions?: string[]
+}
+
 // ─── Short Drama ──────────────────────────────────────────────────────────────
 
 /** Max episode outlines requested per AI call — keeps each call within token limits. */
 export const DRAMA_BATCH_SIZE = 12
+
+export const DRAMA_TEMPLATE_FORMULAS: Record<string, string[]> = {
+  '打脸逆袭': ['开局羞辱/误判', '主角隐藏能力或资源', '第一次反杀建立爽感', '反派升级压迫', '身份/能力阶段性揭露', '更大势力介入', '终局清算与价值回收'],
+  '先婚后爱': ['契约/被迫绑定', '互相误解与利益试探', '同处一室制造亲密张力', '外部情敌或家族压力', '一方先动心但嘴硬', '误会爆发分离', '公开选择与情感兑现'],
+  '重生复仇': ['前世惨死/背叛记忆', '重生回到关键节点', '提前布局打破原命运', '仇人反扑升级', '隐藏证据逐步收网', '最大背叛者暴露', '复仇完成并获得新生'],
+  '霸总甜宠': ['身份差/阶层差开局', '霸总强势介入', '女主底线反制', '甜宠保护与外界打压', '家族/商业危机', '误会与占有欲爆发', '公开偏爱与关系确认'],
+  '赘婿崛起': ['低位受辱', '隐藏实力铺垫', '小场面反杀', '家族/商业危机检验', '旧敌或大佬登场', '身份揭露震慑全场', '守护家庭并掌控局面'],
+  '穿越古代': ['现代认知进入古代困局', '用现代技能破局', '卷入权力/家族斗争', '建立盟友与情感线', '反派借规则压制', '用制度差反杀', '改写命运并站稳身份'],
+  '替嫁真千金': ['被迫替嫁/真假身份错位', '婚后冷遇与试探', '真能力/真身份露出', '假千金或家族陷害', '男主立场摇摆后偏爱', '身份真相爆发', '清算冒名者并获得承认'],
+  '闪婚契约': ['意外闪婚/协议绑定', '生活磨合与边界感', '契约关系被外界挑战', '共同解决危机', '假戏真做但不承认', '契约到期制造分离', '主动续约变真爱'],
+}
+
+export function getDramaTemplateFormula(template: string): string[] {
+  return DRAMA_TEMPLATE_FORMULAS[template] ?? DRAMA_TEMPLATE_FORMULAS['打脸逆袭']
+}
+
+const DRAMA_QUALITY_TARGET = `90分短剧创作标准：
+1. 逻辑闭环：每个关键事件必须有清楚因果，人物不能为了推进剧情突然降智或强行误会
+2. 动机强度：主角、反派、CP和关键配角都要有明确欲望、损失代价和行动理由
+3. 爽点设计：爽点必须来自压迫后的反击、身份/能力揭露、关系选择、资源碾压或情绪补偿，不能只写「很爽」
+4. 爽点密度：每集至少1个明确爽点，每3-5集要有一次阶段性大爽点或强反转
+5. 冲突升级：反派压力、关系误会、利益冲突要逐级加码，不能横向重复同一种冲突
+6. 钩子强度：每集前5秒必须有冲突、悬念、反差、羞辱、危机或强情绪，不允许平铺垫场
+7. 悬念追更：每集结尾必须留下未解决问题、身份风险、情感选择、危机倒计时或反转预告
+8. 人物一致：角色说话和行动要符合身份、性格、秘密和阶段性成长
+9. 信息控制：关键信息要分批释放，避免一次讲完；每次揭露都要改变人物关系或局势
+10. 可拍可生成：场景、动作、道具、冲突要具体可视化，避免抽象心理描写和无法落地的大场面
+11. 台词质量：对白要短、狠、口语化，有潜台词和对抗感，不用解释型台词搬运剧情
+12. 输出前自检：如果方案按hook、爽点、反转、动机、悬念、台词、可生成性、连续性评分低于90分，必须先自行重写到90分以上再输出`
+
+export function buildShortDramaBiblePrompt(p: {
+  template: string
+  episodeCount: number
+  episodeDuration: number
+  brief: string
+  satisfactionType: string
+}): PromptPair {
+  const formula = getDramaTemplateFormula(p.template)
+  return {
+    system: `你是短剧总编剧和内容制片人，负责在正式写分集前建立可执行的「故事圣经」。
+
+目标：把用户一句话创意升级成可连续生产${p.episodeCount}集、每集${p.episodeDuration}秒的短剧项目。
+
+专业要求：
+1. 先抓商业卖点：用户为什么点开、为什么追更、为什么转发
+2. 角色必须有强欲望、强秘密、强关系张力
+3. 主线矛盾要能持续升级，不能只够拍三五集
+4. 爽点要绑定人物处境和反派压迫，不能机械堆反转
+5. 设定必须利于后续生成角色图、场景图、道具图和逐集分镜
+6. 必须遵守该类型的结构公式：${formula.join(' → ')}
+
+${DRAMA_QUALITY_TARGET}
+
+严格按JSON返回，不要有任何其他内容。字符串值内部不要使用英文双引号 "，如需引用称谓/台词/片名，请使用中文引号「」：
+{
+  "title": "剧名",
+  "synopsis": "故事概要（3-5句，包含主线矛盾、情绪承诺、爽点方向）",
+  "firstHook": "第一集前5秒发生的事（具体、强冲突、能停住用户）",
+  "storyBible": {
+    "logline": "一句话卖点",
+    "audience": "目标受众和情绪需求",
+    "emotionalPromise": "观众追更后持续获得的情绪回报",
+    "coreConflict": "贯穿全剧的核心矛盾",
+    "world": "世界观/职业/家庭/阶层环境",
+    "protagonistArc": "主角成长线：起点→中段变化→终局状态",
+    "antagonistPressure": "反派压迫线：如何层层加码",
+    "relationshipEngine": "人物关系引擎：误会、契约、亲情、利益或身份秘密如何制造剧情",
+    "visualStyle": "画面风格、主要场景质感、服化道方向",
+    "taboo": ["必须避免的俗套或风险"],
+    "mustKeep": ["后续分集必须遵守的硬设定"]
+  },
+  "characters": [
+    {"name": "角色名", "role": "主角/CP/反派/配角", "appearance": "详细外貌", "personality": "性格与定位", "arc": "角色弧线", "desire": "强欲望", "secret": "秘密/误解/隐藏身份"}
+  ],
+  "content": "世界观设定 + 人物关系 + 整体剧情走向（含中后期高潮规划）"
+}`,
+    user: `【剧情模板】${p.template}
+【集数规划】共${p.episodeCount}集，每集${p.episodeDuration}秒
+【爽点类型】${p.satisfactionType || '综合爽点'}
+【模板结构公式】${formula.join(' → ')}
+【故事方向】${p.brief}
+
+请先生成故事圣经，要求可直接指导后续分集大纲、资产提取和分镜生成。`,
+  }
+}
 
 export function buildShortDramaPrompt(p: {
   template: string
@@ -18,19 +142,38 @@ export function buildShortDramaPrompt(p: {
   episodeDuration: number
   brief: string
   satisfactionType: string
+  bible?: ShortDramaStoryBible
 }): PromptPair {
   const outputEp = Math.min(p.episodeCount, DRAMA_BATCH_SIZE)
+  const formula = getDramaTemplateFormula(p.template)
+  const bibleText = p.bible ? JSON.stringify({
+    title: p.bible.title,
+    synopsis: p.bible.synopsis,
+    firstHook: p.bible.firstHook,
+    storyBible: p.bible.storyBible,
+    characters: p.bible.characters,
+    content: p.bible.content,
+  }, null, 2) : ''
   return {
     system: `你是中国互联网短剧专业编剧，专注创作「${p.template}」类型爆款短剧。
 
 核心创作规则：
 1. 第一集前5秒：立即制造强烈冲突或反差，决定用户是否继续看
 2. 每集节奏：开场钩子 → 快速推进 → 爽点/冲突 → 悬念结尾，不能拖沓
-3. 爽点密度：每集至少1个让观众"爽到"的时刻（反转/打脸/财富/能力碾压）
+3. 爽点密度：每集至少1个让观众「爽到」的时刻（反转/打脸/财富/能力碾压）
 4. 每集结尾必须制造强悬念，让观众想刷下一集
 5. 对话精炼有力，口语化，适合竖屏快消费
+6. 分集升级必须贴合模板结构公式：${formula.join(' → ')}
 
-严格按JSON返回，不要有任何其他内容：
+${DRAMA_QUALITY_TARGET}
+
+分集大纲硬约束：
+- beats至少3条，必须体现「因果推进 → 冲突升级 → 情绪回收/反转」
+- satisfactionPoint必须写清「谁被压迫、谁反击、观众爽在哪里」
+- cliffhanger必须是具体事件，不要写「留下悬念」这种空话
+- 相邻集不能重复同一种冲突；每一集都要让局势发生不可逆变化
+
+严格按JSON返回，不要有任何其他内容。字符串值内部不要使用英文双引号 "，如需引用称谓/台词/片名，请使用中文引号「」：
 {
   "title": "剧名",
   "synopsis": "故事概要（包含主要矛盾和爽点方向，3-5句）",
@@ -50,12 +193,13 @@ export function buildShortDramaPrompt(p: {
   ],
   "content": "世界观设定 + 人物关系 + 整体剧情走向（含后期高潮规划）"
 }`,
-    user: `【剧情模板】${p.template}
+    user: `${p.bible ? `【已锁定故事圣经】\n${bibleText}\n\n` : ''}【剧情模板】${p.template}
 【集数规划】共${p.episodeCount}集，每集${p.episodeDuration}秒
 【爽点类型】${p.satisfactionType || '综合爽点'}
+【模板结构公式】${formula.join(' → ')}
 【故事方向】${p.brief}
 
-请生成第1集到第${outputEp}集的详细分集大纲（episodes数组，ep字段为真实集号）。`,
+请${p.bible ? '严格遵守故事圣经，' : ''}生成第1集到第${outputEp}集的详细分集大纲（episodes数组，ep字段为真实集号）。`,
   }
 }
 
@@ -72,11 +216,21 @@ export function buildDramaEpisodesBatchPrompt(p: {
   content: string
   previousCliffhanger?: string
 }): PromptPair {
+  const formula = getDramaTemplateFormula(p.template)
   return {
     system: `你是中国互联网短剧专业编剧，正在续写「${p.template}」类型爆款短剧的分集大纲。
 保持与已确定的世界观、人物、剧情走向一致；每集节奏：开场钩子→快速推进→爽点→悬念结尾；每集结尾制造强悬念。
+继续遵守模板结构公式：${formula.join(' → ')}
 
-严格按JSON返回，只返回episodes数组，不要有任何其他内容：
+${DRAMA_QUALITY_TARGET}
+
+续写硬约束：
+- 必须承接上一集cliffhanger，不能跳过未解决危机
+- 每一集要有新的压力来源或关系变化，不能重复上一批剧情
+- 中后段必须持续抬高代价：身份暴露、关系破裂、资源被夺、倒计时危机或反派升级
+- 每个satisfactionPoint要具体说明爽点机制，每个cliffhanger要具体说明下集追看的问题
+
+严格按JSON返回，只返回episodes数组，不要有任何其他内容。字符串值内部不要使用英文双引号 "，如需引用称谓/台词/片名，请使用中文引号「」：
 {
   "episodes": [
     {"ep": 集号, "title": "集标题", "hook": "开场钩子（前5秒）", "beats": ["剧情节点1","剧情节点2","剧情节点3"], "satisfactionPoint": "本集爽点", "cliffhanger": "结尾悬念"}
@@ -87,10 +241,229 @@ export function buildDramaEpisodesBatchPrompt(p: {
 【世界观与走向】${p.content}
 【主要角色】${p.characters.map((c) => `${c.name}（${c.role ?? ''}）`).join('、')}
 【爽点类型】${p.satisfactionType || '综合爽点'}
+【模板结构公式】${formula.join(' → ')}
 【每集时长】${p.episodeDuration}秒
 ${p.previousCliffhanger ? `【上一集结尾悬念】${p.previousCliffhanger}` : ''}
 
 请继续生成第${p.from}集到第${p.to}集的详细分集大纲，ep字段必须为真实集号（${p.from}…${p.to}），与前文剧情连贯。`,
+  }
+}
+
+export function buildEpisodeScriptPrompt(p: {
+  title: string
+  episode: { ep: number; title?: string; hook?: string; beats?: string[]; satisfactionPoint?: string; cliffhanger?: string }
+  episodeDuration: number
+  characters: Array<{ name: string; role?: string; appearance?: string }>
+  locations: string[]
+}): PromptPair {
+  const beatList = (p.episode.beats ?? []).map((b, i) => `${i + 1}. ${b}`).join('\n')
+  const minShots = Math.ceil(p.episodeDuration / 7)
+  const maxShots = Math.ceil(p.episodeDuration / 2.5)
+  return {
+    system: `你是竖屏短剧单集编剧，负责把分集大纲扩写成可拍摄、可生成分镜的完整单集剧本。
+
+要求：
+- 总时长约${p.episodeDuration}秒，节奏要紧，不能有闲聊
+- 前5秒必须承接开场钩子
+- 每段写清楚场景、人物动作、对白、情绪、转场
+- 对白口语化、有冲突，避免解释型台词
+- 结尾必须精准落在悬念上
+
+${DRAMA_QUALITY_TARGET}
+
+单集剧本硬约束：
+- 每10-15秒必须有一次信息变化、关系变化、情绪变化或局势变化
+- 每句对白都要服务于冲突、压迫、反击、误会、试探或情绪兑现
+- 动作和表情必须可视化，便于后续生成分镜
+- 爽点必须落在具体动作、台词、身份揭露或局势反转上
+- 结尾最后3秒必须停在强画面或强台词上
+
+严格按JSON返回，不要有任何其他内容。字符串值内部不要使用英文双引号 "，对白、称谓、强调内容请使用中文引号「」：
+{
+  "script": "完整单集剧本，按【场景/动作/对白/转场】排版",
+  "dialogueHighlights": ["高记忆点台词1", "高记忆点台词2"],
+  "productionNotes": ["拍摄/AI生成注意事项1", "注意事项2"]
+}`,
+    user: `【剧名】${p.title}
+【本集】第${p.episode.ep}集 ${p.episode.title ?? ''}
+【本集时长】${p.episodeDuration}秒
+【开场钩子】${p.episode.hook ?? ''}
+【剧情节点】
+${beatList}
+【本集爽点】${p.episode.satisfactionPoint ?? ''}
+【结尾悬念】${p.episode.cliffhanger ?? ''}
+【可用角色】${p.characters.map((c) => c.name).join('、') || '（无固定角色）'}
+【可用场景】${p.locations.join('、') || '（可自行合理设定）'}
+
+请生成本集完整剧本。`,
+  }
+}
+
+export function buildEpisodeRewritePrompt(p: {
+  title: string
+  episode: { ep: number; title?: string; hook?: string; beats?: string[]; satisfactionPoint?: string; cliffhanger?: string }
+  episodeDuration: number
+  template?: string
+  rewriteGoal?: string
+}): PromptPair {
+  const formula = p.template ? getDramaTemplateFormula(p.template) : []
+  return {
+    system: `你是短剧改稿编辑，负责把单集大纲重写得更抓人、更有爽点、更利于拍摄。
+
+规则：
+- 保留集号，但可以重写标题、钩子、剧情节点、爽点、悬念
+- 前5秒更强，结尾更想追下一集
+- 动机更清楚，冲突更具体
+- 不要破坏整剧类型公式${formula.length ? `：${formula.join(' → ')}` : ''}
+
+${DRAMA_QUALITY_TARGET}
+
+改稿必须优先修复：
+- 钩子不够强：改成具体冲突/危机/羞辱/反差
+- 爽点不够明：补清压迫对象、反击方式、情绪回报
+- 动机不合理：补清角色为什么必须这么做、失败会失去什么
+- 悬念不追更：改成下一集必须立刻解决的具体危机
+
+严格按JSON返回，不要有任何其他内容。字符串值内部不要使用英文双引号 "，对白、称谓、强调内容请使用中文引号「」：
+{
+  "title": "重写后的集标题",
+  "hook": "重写后的前5秒钩子",
+  "beats": ["剧情节点1", "剧情节点2", "剧情节点3"],
+  "satisfactionPoint": "重写后的爽点",
+  "cliffhanger": "重写后的结尾悬念"
+}`,
+    user: `【剧名】${p.title}
+【集号】第${p.episode.ep}集
+【当前标题】${p.episode.title ?? ''}
+【当前钩子】${p.episode.hook ?? ''}
+【当前剧情节点】${(p.episode.beats ?? []).join('；')}
+【当前爽点】${p.episode.satisfactionPoint ?? ''}
+【当前悬念】${p.episode.cliffhanger ?? ''}
+【每集时长】${p.episodeDuration}秒
+【改稿目标】${p.rewriteGoal || '增强钩子、爽点和追更欲望'}
+
+请重写这一集的大纲。`,
+  }
+}
+
+export function buildDramaQualityReviewPrompt(p: {
+  title: string
+  synopsis: string
+  storyBible?: ShortDramaStoryBible['storyBible']
+  characters: Array<{ name: string; role?: string; arc?: string; desire?: string; secret?: string }>
+  episodes: Array<{ ep: number; title?: string; hook?: string; beats?: string[]; satisfactionPoint?: string; cliffhanger?: string }>
+  episodeDuration: number
+}): PromptPair {
+  const episodeDigest = p.episodes.map((e) => `第${e.ep}集《${e.title ?? ''}》：钩子=${e.hook ?? ''}；节点=${(e.beats ?? []).join(' / ')}；爽点=${e.satisfactionPoint ?? ''}；悬念=${e.cliffhanger ?? ''}`).join('\n')
+  return {
+    system: `你是短剧平台的资深审稿总监，对短剧项目做上线前质检。
+
+评分维度全部为0-10分，totalScore为0-100分：
+- hook：前5秒钩子强度
+- satisfactionDensity：爽点密度
+- reversal：反转有效性
+- motivation：人物动机合理性
+- cliffhanger：集尾悬念
+- dialogue：台词口语化潜力
+- producibility：可拍摄/可AI生成程度
+- consistency：角色、设定、分集连续性
+
+要求：
+1. 判断必须具体，不要客套
+2. 风险要指出会影响完播/追更/生成落地的问题
+3. 重写建议要能直接指导下一轮改稿
+4. 以90分作为可上线标准；低于90分必须明确指出最拖分的3个问题和对应改法
+5. 对hook、爽点、动机、悬念、连续性从商业短剧角度严格打分，不要虚高
+
+${DRAMA_QUALITY_TARGET}
+
+严格按JSON返回，不要有任何其他内容。字符串值内部不要使用英文双引号 "，对白、称谓、强调内容请使用中文引号「」：
+{
+  "totalScore": 0,
+  "verdict": "一句话审稿结论",
+  "scores": {
+    "hook": 0,
+    "satisfactionDensity": 0,
+    "reversal": 0,
+    "motivation": 0,
+    "cliffhanger": 0,
+    "dialogue": 0,
+    "producibility": 0,
+    "consistency": 0
+  },
+  "strengths": ["优势1", "优势2"],
+  "risks": ["风险1", "风险2"],
+  "rewriteSuggestions": ["重写建议1", "重写建议2", "重写建议3"]
+}`,
+    user: `【剧名】${p.title}
+【概要】${p.synopsis}
+【每集时长】${p.episodeDuration}秒
+【故事圣经】${JSON.stringify(p.storyBible ?? {}, null, 2)}
+【角色】${p.characters.map((c) => `${c.name}（${c.role ?? ''}，欲望：${c.desire ?? ''}，秘密：${c.secret ?? ''}，弧线：${c.arc ?? ''}）`).join('；')}
+【分集大纲】
+${episodeDigest}
+
+请完成专业编剧质检。`,
+  }
+}
+
+export function buildDramaRewriteByQualityPrompt(p: {
+  title: string
+  synopsis: string
+  content: string
+  storyBible?: ShortDramaStoryBible['storyBible']
+  characters: Array<{ name: string; role?: string; appearance?: string; personality?: string; arc?: string; desire?: string; secret?: string }>
+  episodes: Array<{ ep: number; title?: string; hook?: string; beats?: string[]; satisfactionPoint?: string; cliffhanger?: string }>
+  episodeDuration: number
+  template?: string
+  qualityReport?: DramaQualityReport
+}): PromptPair {
+  const formula = p.template ? getDramaTemplateFormula(p.template) : []
+  return {
+    system: `你是短剧总编剧，负责根据质检报告对整部短剧分集大纲进行专业改稿。
+
+改稿原则：
+1. 保留剧名、世界观、主要角色，不要推翻故事圣经
+2. 严格保留总集数和每一集ep编号
+3. 按质检报告重点修复：钩子弱、爽点不足、动机不清、悬念不强、可生成性差等问题
+4. 每集都要有更明确的前5秒钩子、剧情推进、爽点和悬念
+5. ${formula.length ? `继续遵守模板结构公式：${formula.join(' → ')}` : '继续遵守原有类型结构'}
+
+${DRAMA_QUALITY_TARGET}
+
+90分改稿目标：
+- 优先把总分拉到90分以上
+- 每个被质检指出的风险都要在新episodes里有对应修复
+- 不允许只改措辞，必须改变剧情压力、信息释放、爽点落点或悬念机制
+- 保持集数不变，但允许重排单集内部beats来提升节奏
+
+严格按JSON返回，不要有任何其他内容。字符串值内部不要使用英文双引号 "，如需引用称谓/台词/片名，请使用中文引号「」：
+{
+  "synopsis": "改稿后的故事概要",
+  "content": "改稿后的世界观 + 人物关系 + 整体剧情走向",
+  "episodes": [
+    {
+      "ep": 1,
+      "title": "改稿后的集标题",
+      "hook": "更强的前5秒钩子",
+      "beats": ["剧情节点1", "剧情节点2", "剧情节点3"],
+      "satisfactionPoint": "更明确的爽点",
+      "cliffhanger": "更强的结尾悬念"
+    }
+  ]
+}`,
+    user: `【剧名】${p.title}
+【每集时长】${p.episodeDuration}秒
+【故事圣经】${JSON.stringify(p.storyBible ?? {}, null, 2)}
+【角色】${p.characters.map((c) => `${c.name}（${c.role ?? ''}，${c.personality ?? ''}）`).join('；')}
+【当前概要】${p.synopsis}
+【当前整体走向】${p.content}
+【当前分集大纲】
+${JSON.stringify(p.episodes, null, 2)}
+【质检报告】
+${JSON.stringify(p.qualityReport ?? {}, null, 2)}
+
+请按质检报告重写全剧分集大纲，episodes数量必须仍为${p.episodes.length}集，ep编号必须从1到${p.episodes.length}连续。`,
   }
 }
 
@@ -134,35 +507,57 @@ ${epDigest}
 /** Per-episode storyboard — expands one episode's beats into shootable shots. */
 export function buildEpisodeStoryboardPrompt(p: {
   title: string
-  episode: { ep: number; title?: string; hook?: string; beats?: string[]; satisfactionPoint?: string; cliffhanger?: string }
+  episode: { ep: number; title?: string; hook?: string; beats?: string[]; satisfactionPoint?: string; cliffhanger?: string; script?: string }
   episodeDuration: number
   characters: Array<{ name: string; role?: string; appearance?: string }>
   locations: string[]
 }): PromptPair {
   const beatList = (p.episode.beats ?? []).map((b, i) => `${i + 1}. ${b}`).join('\n')
+  const minShots = Math.ceil(p.episodeDuration / 7)
+  const maxShots = Math.ceil(p.episodeDuration / 2.5)
   return {
     system: `你是专业分镜师，把一集短剧的剧情拆解成可拍摄/可生成的分镜表。
 
 规则：
 - 竖屏短剧，画幅默认9:16
-- 本集总时长约${p.episodeDuration}秒，所有分镜时长之和应接近该值，每个分镜3-6秒
+- 本集总时长必须达到${p.episodeDuration}秒左右，所有分镜duration相加必须在${Math.max(1, p.episodeDuration - 5)}-${p.episodeDuration + 5}秒之间
+- 必须生成${minShots}-${maxShots}个分镜；90秒通常需要16-30个分镜，不能只生成十个以内
+- duration必须按导演专业判断估时，禁止平均化，禁止大批量全部写成4s/5s/6s
+- 镜头估时规则：反应特写/眼神/信息闪现2-3秒；普通动作推进3-5秒；含对白交锋/复杂站位/多人物调度5-8秒；关键爽点、身份揭露、结尾悬念可6-9秒
+- 时长必须服务节奏：钩子镜头短促有冲击，压迫铺垫略长，爽点反击有起承转合，悬念落点留停顿
+- durationReason必须解释该镜头为什么给这个时长，不能写泛泛的「节奏需要」
 - 开场第一个分镜必须承接本集钩子，最后一个分镜落在结尾悬念上
 - 每个分镜的locationName必须从【可用场景】中选择；characterNames必须从【可用角色】中选择，且与description中@到的角色一致
-- description用于AI视频生成，需具体：镜头内容+人物动作+镜头运动(英文)+光线情绪
+- 只要角色名出现在description、blocking、action、expression或dialogue任一字段中，就必须加入characterNames
+- locationName必须使用【可用场景】里的完整场景名，不要自行缩写；propNames同理，出现道具就必须列入
+- 每个分镜必须明确：角色站位、动作、表情/情绪、机位角度、景别、运镜、构图
+- description用于AI视频生成，需整合结构化字段：镜头内容 + @角色 + 站位 + 动作 + 表情 + 机位/运镜 + 光线情绪
+- dialogue不能全部为空：短剧必须保留关键台词
+- 至少35%的分镜要有dialogue；开场钩子、压迫/质问、反击爽点、结尾悬念所在镜头必须有短台词或旁白
+- dialogue要短、狠、口语化、有潜台词；每条不超过28个汉字；无台词镜头才允许空字符串
+- 如果有【已生成单集剧本】，必须把剧本里的关键对白拆入对应分镜，不得丢失
+- 如果没有单集剧本，必须根据hook、beats、satisfactionPoint、cliffhanger为关键镜头创作对抗性台词
 
 严格按JSON返回，不要有任何其他内容：
+字符串值内部不要使用英文双引号 "，对白、称谓、强调内容请使用中文引号「」。
 {
   "storyboard": [
     {
       "shot": 1,
-      "duration": "4s",
+      "duration": "3s",
+      "durationReason": "开场钩子需要短促冲击，只呈现关键动作和反应",
       "locationName": "从可用场景中选择",
       "characterNames": ["从可用角色中选择，无则[]"],
       "propNames": [],
-      "description": "[0s-4s] @场景 场景细节。@角色 动作细节。camera动作(push in/pull out/follows/static等)。光线情绪。",
+      "description": "[0s-4s] @场景 场景细节。@角色 按站位执行动作，呈现表情。camera动作(push in/pull out/follows/static等)。光线情绪。",
+      "blocking": "角色站位与空间关系，如：女主站画面左前景，男主在右后方半步，反派隔桌压迫",
+      "action": "角色动作，如：女主攥紧合同后抬头反击，男主伸手挡住反派",
+      "expression": "表情/情绪，如：女主强忍委屈后转为冷静，反派轻蔑冷笑",
+      "cameraAngle": "机位/角度，如：低机位仰拍女主，轻微侧逆光；或过肩视角压迫男主",
+      "composition": "构图，如：三分法，女主占左三分之一，反派形成前景遮挡，留出右侧压迫空间",
       "shotType": "特写/近景/中景/中全景/全景/远景中选一个",
       "camera": "推进/拉远/跟随/固定/环绕/手持",
-      "dialogue": "该镜头台词，无则空字符串",
+      "dialogue": "短台词/旁白；关键冲突镜头必须填写，无台词镜头才可为空",
       "negativePrompt": "画面模糊, 水印, 文字, 低画质",
       "aspectRatio": "9:16"
     }
@@ -175,10 +570,11 @@ export function buildEpisodeStoryboardPrompt(p: {
 ${beatList}
 【本集爽点】${p.episode.satisfactionPoint ?? ''}
 【结尾悬念】${p.episode.cliffhanger ?? ''}
+${p.episode.script ? `【已生成单集剧本】\n${p.episode.script}\n` : ''}
 【可用角色】${p.characters.map((c) => c.name).join('、') || '（无固定角色）'}
 【可用场景】${p.locations.join('、') || '（自行合理设定，名称需在description的@中保持一致）'}
 
-请为本集生成完整分镜表。`,
+请${p.episode.script ? '优先依据单集剧本' : '依据分集大纲'}为本集生成完整分镜表。`,
   }
 }
 

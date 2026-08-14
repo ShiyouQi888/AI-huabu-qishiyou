@@ -12,6 +12,7 @@ import { useModels } from '@/hooks/use-models'
 import { useConnectedPrompt } from '@/hooks/use-connected-prompt'
 import { saveToLibrary } from '@/lib/save-to-library'
 import { getStoryboardRowData } from '@/lib/storyboard-utils'
+import { CopyButton } from '@/components/copy-button'
 
 type Tab = 'prompt' | 'text2img' | 'img2img' | 'ref'
 type Ratio = '1:1' | '4:3' | '16:9' | '9:16' | '3:4'
@@ -546,6 +547,12 @@ function ImageToolNode({ id, data, selected }: ImageNodeProps) {
             </div>
           )}
           <div className="relative flex-1">
+            <CopyButton
+              text={connectedPrompt ? connectedPrompt.text : prompt}
+              iconOnly
+              title="复制提示词"
+              className="absolute right-7 bottom-1.5 z-10"
+            />
             <textarea
               value={connectedPrompt ? connectedPrompt.text : prompt}
               onChange={(e) => setPrompt(e.target.value)}

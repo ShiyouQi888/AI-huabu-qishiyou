@@ -18,16 +18,12 @@ import {
   Boxes,
   CheckCircle2,
   Copy,
-  FileText,
-  Film,
-  ImageIcon,
   Moon,
   Plus,
   Redo2,
   RotateCcw,
   Route,
   Scissors,
-  Sparkles,
   Sun,
   Trash2,
   Undo2,
@@ -36,8 +32,7 @@ import {
 } from 'lucide-react'
 import { useTheme } from 'next-themes'
 
-import { CustomNodeData, EdgeStyleType, useFlowStore, NodeType, WorkflowSnapshot } from '@/lib/store'
-import { templates } from '@/lib/templates'
+import { CustomNodeData, EdgeStyleType, useFlowStore, NodeType } from '@/lib/store'
 import ImageNode from './nodes/image-node'
 import VideoNode from './nodes/video-node'
 import TextNode from './nodes/text-node'
@@ -51,7 +46,7 @@ import GroupNode from './nodes/group-node'
 import PromptAssistantNode from './nodes/prompt-assistant-node'
 import GraphicNode from './nodes/graphic-node'
 import GraphicBriefNode from './nodes/graphic-brief-node'
-import { SidebarToolbar } from './sidebar-toolbar'
+import { SidebarToolbar, nodeOptions, nodeInitialData } from './sidebar-toolbar'
 import { ZoomControls } from './zoom-controls'
 import { CanvasMenuPanel, CanvasMenuPanelType } from './canvas-menu-panel'
 import { CommandPalette } from './command-palette'
@@ -613,66 +608,46 @@ function Flow() {
   )
 }
 
-const templateIconMap: Record<string, typeof Film> = {
-  film: Film,
-  sparkles: Sparkles,
-  'user-circle': ImageIcon,
-  clapperboard: Film,
-  type: FileText,
-  'image-plus': ImageIcon,
-}
-
 function EmptyCanvasGallery({ sidebarWidth }: { sidebarWidth: number }) {
-  const loadCanvas = useFlowStore((s) => s.loadCanvas)
-  const { fitView } = useReactFlow()
+  const addNode = useFlowStore((s) => s.addNode)
+  const { screenToFlowPosition, fitView } = useReactFlow()
 
-  const handleUse = (snapshot: WorkflowSnapshot) => {
-    loadCanvas(snapshot)
-    requestAnimationFrame(() => fitView({ duration: 300, padding: 0.2 }))
+  const handleAdd = (type: NodeType) => {
+    const position = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
+    addNode(type, position, nodeInitialData(type))
+    requestAnimationFrame(() => fitView({ duration: 300, padding: 0.3 }))
   }
 
   return (
-    <div
-      className="pointer-events-auto absolute inset-0 z-10 flex items-center justify-center overflow-y-auto"
-    >
+    <div className="pointer-events-auto absolute inset-0 z-10 flex items-center justify-center overflow-y-auto">
       <div className="w-full max-w-3xl px-8 py-16">
         <div className="mb-8 text-center">
-          <h2 className="text-xl font-bold text-foreground">选择模板开始创作</h2>
-          <p className="mt-2 text-sm text-muted-foreground">选择一个工作流模板快速开始，或创建空白画布自由搭建</p>
+          <h2 className="text-xl font-bold text-foreground">从节点开始创作</h2>
+          <p className="mt-2 text-sm text-muted-foreground">点击一个节点添加到画布，再自由连接搭建你的 AI 工作流</p>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          {templates.map((tpl) => {
-            const Icon = templateIconMap[tpl.icon] ?? Workflow
-            return (
-              <button
-                key={tpl.id}
-                onClick={() => handleUse(tpl.snapshot)}
-                className="group w-full rounded-2xl border border-border/40 bg-background/60 p-4 text-left backdrop-blur-sm transition-all hover:border-primary/40 hover:bg-primary/5 hover:shadow-lg hover:shadow-primary/5"
-              >
-                <div className="flex gap-3">
-                  <div className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary transition-colors group-hover:bg-primary/20">
-                    <Icon className="size-5" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <h3 className="text-[13px] font-semibold text-foreground">{tpl.title}</h3>
-                    <p className="mt-0.5 text-[12px] text-muted-foreground">{tpl.subtitle}</p>
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {tpl.tags.map((tag) => (
-                        <span key={tag} className="rounded-md bg-muted/50 px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          {nodeOptions.map((opt) => (
+            <button
+              key={opt.type}
+              onClick={() => handleAdd(opt.type)}
+              className="group w-full rounded-2xl border border-border/40 bg-background/60 p-4 text-left backdrop-blur-sm transition-all hover:border-primary/40 hover:bg-primary/5 hover:shadow-lg hover:shadow-primary/5"
+            >
+              <div className="flex items-center gap-3">
+                <div className={`flex size-10 shrink-0 items-center justify-center rounded-2xl transition-transform group-hover:scale-105 ${opt.bgClass}`}>
+                  <opt.icon className={`size-5 ${opt.color}`} />
                 </div>
-              </button>
-            )
-          })}
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-[13px] font-semibold text-foreground">{opt.label}</h3>
+                  <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{opt.desc}</p>
+                </div>
+              </div>
+            </button>
+          ))}
         </div>
 
-        <div className="mt-4 text-center">
-          <p className="text-[11px] text-muted-foreground/40">也可以通过左侧工具栏添加节点，自由搭建工作流</p>
+        <div className="mt-5 text-center">
+          <p className="text-[11px] text-muted-foreground/40">也可以从底部工具栏添加节点或导入素材</p>
         </div>
       </div>
     </div>

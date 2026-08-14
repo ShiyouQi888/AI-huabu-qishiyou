@@ -20,7 +20,7 @@ import {
   Camera,
   ScrollText,
 } from 'lucide-react'
-import { NodeType, useFlowStore } from '@/lib/store'
+import { NodeType, CustomNodeData, useFlowStore } from '@/lib/store'
 import { useReactFlow } from '@xyflow/react'
 import { CanvasMenuPanelType } from './canvas-menu-panel'
 import { cn } from '@/lib/utils'
@@ -31,24 +31,42 @@ interface SidebarToolbarProps {
   onOpenMaterials: () => void
 }
 
-const nodeOptions: {
+export interface NodeOption {
   type: NodeType
   label: string
+  desc: string
   icon: typeof AlignLeft
   color: string
   bgClass: string
   beta?: boolean
-}[] = [
-  { type: 'text',           label: 'AI 文本',    icon: AlignLeft,          color: 'text-amber-400',   bgClass: 'bg-amber-500/10' },
-  { type: 'image',          label: 'AI 生图',    icon: ImageIcon,          color: 'text-blue-400',    bgClass: 'bg-blue-500/10' },
-  { type: 'video',          label: 'AI 视频',    icon: Video,              color: 'text-violet-400',  bgClass: 'bg-violet-500/10' },
-  { type: 'script',         label: 'AI 编剧',    icon: FileCode2,          color: 'text-orange-400',  bgClass: 'bg-orange-500/10' },
-  { type: 'screenplay',     label: 'AI 剧本',    icon: ScrollText,         color: 'text-pink-400',    bgClass: 'bg-pink-500/10' },
-  { type: 'scene',          label: '场景描述',   icon: Camera,             color: 'text-cyan-400',    bgClass: 'bg-cyan-500/10' },
-  { type: 'storyboard',     label: '分镜表',     icon: Table2,             color: 'text-teal-400',    bgClass: 'bg-teal-500/10' },
-  { type: 'graphic',        label: 'AI 平面',    icon: PenTool,            color: 'text-rose-400',    bgClass: 'bg-rose-500/10' },
-  { type: 'promptAssistant', label: '提示词助手', icon: MessageSquareText,  color: 'text-emerald-400', bgClass: 'bg-emerald-500/10' },
+}
+
+export const nodeOptions: NodeOption[] = [
+  { type: 'text',            label: 'AI 文本',    desc: '生成文案 / 对话 / 文本',   icon: AlignLeft,         color: 'text-amber-400',   bgClass: 'bg-amber-500/10' },
+  { type: 'image',           label: 'AI 生图',    desc: '文生图 / 图生图',          icon: ImageIcon,         color: 'text-blue-400',    bgClass: 'bg-blue-500/10' },
+  { type: 'video',           label: 'AI 视频',    desc: '文 / 图生视频',            icon: Video,             color: 'text-violet-400',  bgClass: 'bg-violet-500/10' },
+  { type: 'script',          label: 'AI 编剧',    desc: '按内容类型策划剧本',       icon: FileCode2,         color: 'text-orange-400',  bgClass: 'bg-orange-500/10' },
+  { type: 'screenplay',      label: 'AI 剧本',    desc: '剧本 → 资产 → 分镜',        icon: ScrollText,        color: 'text-pink-400',    bgClass: 'bg-pink-500/10' },
+  { type: 'scene',           label: '场景描述',   desc: '描述分镜画面内容',         icon: Camera,            color: 'text-cyan-400',    bgClass: 'bg-cyan-500/10' },
+  { type: 'storyboard',      label: '分镜表',     desc: '逐镜管理镜头',             icon: Table2,            color: 'text-teal-400',    bgClass: 'bg-teal-500/10' },
+  { type: 'graphic',         label: 'AI 平面',    desc: '海报 / 广告平面设计',      icon: PenTool,           color: 'text-rose-400',    bgClass: 'bg-rose-500/10' },
+  { type: 'promptAssistant', label: '提示词助手', desc: '优化 / 扩写提示词',        icon: MessageSquareText, color: 'text-emerald-400', bgClass: 'bg-emerald-500/10' },
 ]
+
+/** Default initial data for node types that need seeded content (storyboard / screenplay). */
+export function nodeInitialData(type: NodeType): Partial<CustomNodeData> | undefined {
+  if (type === 'storyboard') {
+    const rows = [1, 2, 3].map((i) => ({
+      sceneIndex: i, description: '', camera: '', dialogue: '',
+      shotType: '', sceneImages: [], characterImages: [], propImages: [],
+    }))
+    return { content: JSON.stringify(rows), status: 'ready' }
+  }
+  if (type === 'screenplay') {
+    return { content: JSON.stringify({ title: '未命名剧本', synopsis: '', content: '' }), status: 'idle' }
+  }
+  return undefined
+}
 
 const toolbarItems = [
   { id: 'templates'  as const, icon: LayoutTemplate, label: '模板工作流',  shortcut: 'T' },
@@ -103,18 +121,7 @@ export function SidebarToolbar({ onOpenMaterials, activePanel, onOpenPanel }: Si
       x: window.innerWidth / 2,
       y: window.innerHeight / 2,
     })
-    if (type === 'storyboard') {
-      const rows = [1, 2, 3].map((i) => ({
-        sceneIndex: i, description: '', camera: '', dialogue: '',
-        shotType: '', sceneImages: [], characterImages: [], propImages: [],
-      }))
-      addNode(type, position, { content: JSON.stringify(rows), status: 'ready' })
-    } else if (type === 'screenplay') {
-      const emptyScreenplay = JSON.stringify({ title: '未命名剧本', synopsis: '', content: '' })
-      addNode(type, position, { content: emptyScreenplay, status: 'idle' })
-    } else {
-      addNode(type, position)
-    }
+    addNode(type, position, nodeInitialData(type))
     setShowAddMenu(false)
     setSearchQuery('')
   }, [addNode, screenToFlowPosition])

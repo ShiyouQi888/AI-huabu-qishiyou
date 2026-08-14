@@ -42,6 +42,7 @@ const DEFAULT_CONFIGS: Record<string, DefaultConfig> = {
       'doubao-seedream-5-0-260128',
       'doubao-seedream-4-5-251128',
       'doubao-seedream-4-0-250828',
+      'doubao-seedance-2-5-260628',
       'doubao-seedance-2-0-260128',
       'doubao-seedance-2-0-fast-260128',
       'doubao-seedance-1-5-pro-251215',

@@ -2,12 +2,13 @@
 
 import { memo, useState, useEffect, useRef } from 'react'
 import { NodeProps, Node } from '@xyflow/react'
-import { AlignLeft, ArrowUp, Loader2, Sparkles, ChevronDown, ChevronRight, Brain, Copy, Check } from 'lucide-react'
+import { AlignLeft, ArrowUp, Loader2, Sparkles, ChevronDown, ChevronRight, Brain } from 'lucide-react'
 import { CustomNodeData, useFlowStore } from '@/lib/store'
 import { ModelSelector } from '@/components/model-selector'
 import { NodeBase } from './node-base'
 import { useModels } from '@/hooks/use-models'
 import { cn } from '@/lib/utils'
+import { CopyButton } from '@/components/copy-button'
 
 type TextNodeProps = NodeProps<Node<CustomNodeData>>
 
@@ -19,7 +20,6 @@ function TextNode({ id, data, selected }: TextNodeProps) {
   const [reasoning, setReasoning] = useState<string | null>(null)
   const [streamingText, setStreamingText] = useState('')
   const [showReasoning, setShowReasoning] = useState(true)
-  const [copied, setCopied] = useState(false)
   const updateNodeData = useFlowStore((s) => s.updateNodeData)
   const deleteNode = useFlowStore((s) => s.deleteNode)
   const abortRef = useRef<AbortController | null>(null)
@@ -53,16 +53,6 @@ function TextNode({ id, data, selected }: TextNodeProps) {
 
   const handleBlur = () => {
     updateNodeData(id, { content: text, status: text.trim() ? 'ready' : 'idle' })
-  }
-
-  const handleCopy = async (e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (!text.trim()) return
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    } catch { /* fallback */ }
   }
 
   const optimizePrompt = async () => {
@@ -260,15 +250,7 @@ function TextNode({ id, data, selected }: TextNodeProps) {
               )}
               <span className="text-[12px] tabular-nums text-muted-foreground/50">{charCount} 字</span>
             </div>
-            <button
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={handleCopy}
-              disabled={!text.trim()}
-              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[12px] text-muted-foreground hover:bg-accent hover:text-foreground transition-colors disabled:opacity-30"
-            >
-              {copied ? <Check className="size-3 text-emerald-500" /> : <Copy className="size-3" />}
-              {copied ? '已复制' : '复制'}
-            </button>
+            <CopyButton text={text} className="text-[12px] hover:bg-accent" />
           </div>
         )}
       </div>

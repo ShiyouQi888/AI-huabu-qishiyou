@@ -14,6 +14,7 @@ const nodeTypeMap: Record<NodeType, string> = {
   graphic: 'graphicNode',
   graphicBrief: 'graphicBriefNode',
   episodeList: 'episodeListNode',
+  videoSynthesis: 'videoSynthesisNode',
   group: 'groupNode',
 }
 
