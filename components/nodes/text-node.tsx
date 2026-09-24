@@ -24,6 +24,10 @@ function TextNode({ id, data, selected }: TextNodeProps) {
   const deleteNode = useFlowStore((s) => s.deleteNode)
   const abortRef = useRef<AbortController | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // See script-node.tsx: switching projects unmounts nodes mid-generation without
+  // aborting their in-flight fetch. Abort on unmount so the request doesn't keep
+  // running for a node that no longer exists in the store.
+  useEffect(() => () => abortRef.current?.abort(), [])
 
   const { models: textModels } = useModels({ type: 'text' })
   const [selectedModel, setSelectedModel] = useState<string>('')
@@ -63,7 +67,7 @@ function TextNode({ id, data, selected }: TextNodeProps) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'doubao-seed-2-0-pro-260215',
+          model: 'doubao-seed-evolving',
           prompt: text,
           systemPrompt: `你是一个专业的提示词优化师。请将用户输入优化为一个高质量、详细的大语言模型提示词。要求:
 1. 如果输入简短,扩展出清晰的指令、角色设定、输出格式要求

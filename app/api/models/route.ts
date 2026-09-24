@@ -43,5 +43,8 @@ export async function GET(request: Request) {
     return { ...m, configured }
   })
 
-  return NextResponse.json({ models })
+  return NextResponse.json(
+    { models },
+    { headers: { 'Cache-Control': 'no-store' } },
+  )
 }

@@ -34,6 +34,10 @@ function PromptAssistantNode({ id, data, selected }: PromptAssistantNodeProps) {
   const deleteNode = useFlowStore((s) => s.deleteNode)
   const abortRef = useRef<AbortController | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // See script-node.tsx: switching projects unmounts nodes mid-generation without
+  // aborting their in-flight fetch. Abort on unmount so the request doesn't keep
+  // running for a node that no longer exists in the store.
+  useEffect(() => () => abortRef.current?.abort(), [])
 
   const { models: textModels } = useModels({ type: 'text' })
   const [selectedModel, setSelectedModel] = useState<string>('')
@@ -83,7 +87,7 @@ function PromptAssistantNode({ id, data, selected }: PromptAssistantNodeProps) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'doubao-seed-2-0-pro-260215',
+          model: 'doubao-seed-evolving',
           prompt: text,
           systemPrompt: PROMPT_ASSISTANT_SYSTEM,
           temperature: 0.7,

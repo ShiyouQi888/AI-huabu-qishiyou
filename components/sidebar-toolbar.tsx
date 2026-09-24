@@ -3,6 +3,7 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
 import {
   Plus,
+  AudioLines,
   LayoutTemplate,
   Clock,
   Settings,
@@ -15,15 +16,16 @@ import {
   Upload,
   Image as ImageLibrary,
   Search,
-  MessageSquareText,
   PenTool,
   Camera,
   ScrollText,
+  Layers3,
 } from 'lucide-react'
 import { NodeType, CustomNodeData, useFlowStore } from '@/lib/store'
 import { useReactFlow } from '@xyflow/react'
 import { CanvasMenuPanelType } from './canvas-menu-panel'
 import { cn } from '@/lib/utils'
+import { useProjectStore } from '@/lib/project-store'
 
 interface SidebarToolbarProps {
   activePanel: CanvasMenuPanelType | null
@@ -44,13 +46,14 @@ export interface NodeOption {
 export const nodeOptions: NodeOption[] = [
   { type: 'text',            label: 'AI 文本',    desc: '生成文案 / 对话 / 文本',   icon: AlignLeft,         color: 'text-amber-400',   bgClass: 'bg-amber-500/10' },
   { type: 'image',           label: 'AI 生图',    desc: '文生图 / 图生图',          icon: ImageIcon,         color: 'text-blue-400',    bgClass: 'bg-blue-500/10' },
+  { type: 'imageLayer',      label: '图片分层',   desc: '图层拆分 / 区域编辑',       icon: Layers3,            color: 'text-indigo-400',  bgClass: 'bg-indigo-500/10' },
   { type: 'video',           label: 'AI 视频',    desc: '文 / 图生视频',            icon: Video,             color: 'text-violet-400',  bgClass: 'bg-violet-500/10' },
+  { type: 'audio',           label: 'AI 音频',    desc: '文生语音 / 音色 / 歌曲',   icon: AudioLines,         color: 'text-emerald-400',  bgClass: 'bg-emerald-500/10' },
   { type: 'script',          label: 'AI 编剧',    desc: '按内容类型策划剧本',       icon: FileCode2,         color: 'text-orange-400',  bgClass: 'bg-orange-500/10' },
   { type: 'screenplay',      label: 'AI 剧本',    desc: '剧本 → 资产 → 分镜',        icon: ScrollText,        color: 'text-pink-400',    bgClass: 'bg-pink-500/10' },
   { type: 'scene',           label: '场景描述',   desc: '描述分镜画面内容',         icon: Camera,            color: 'text-cyan-400',    bgClass: 'bg-cyan-500/10' },
   { type: 'storyboard',      label: '分镜表',     desc: '逐镜管理镜头',             icon: Table2,            color: 'text-teal-400',    bgClass: 'bg-teal-500/10' },
   { type: 'graphic',         label: 'AI 平面',    desc: '海报 / 广告平面设计',      icon: PenTool,           color: 'text-rose-400',    bgClass: 'bg-rose-500/10' },
-  { type: 'promptAssistant', label: '提示词助手', desc: '优化 / 扩写提示词',        icon: MessageSquareText, color: 'text-emerald-400', bgClass: 'bg-emerald-500/10' },
 ]
 
 /** Default initial data for node types that need seeded content (storyboard / screenplay). */
@@ -58,14 +61,33 @@ export function nodeInitialData(type: NodeType): Partial<CustomNodeData> | undef
   if (type === 'storyboard') {
     const rows = [1, 2, 3].map((i) => ({
       sceneIndex: i, description: '', camera: '', dialogue: '',
-      shotType: '', sceneImages: [], characterImages: [], propImages: [],
+      shotType: '', blocking: '', action: '', expression: '', cameraAngle: '', composition: '',
+      sceneImages: [], characterImages: [], propImages: [],
     }))
-    return { content: JSON.stringify(rows), status: 'ready' }
+    return { content: JSON.stringify(rows), status: 'idle' }
   }
   if (type === 'screenplay') {
-    return { content: JSON.stringify({ title: '未命名剧本', synopsis: '', content: '' }), status: 'idle' }
+    return {
+      content: JSON.stringify({ title: '未命名剧本', synopsis: '', content: '' }),
+      status: 'idle',
+    }
   }
   return undefined
+}
+
+export function canvasCenterScreenPoint(sidebarWidth: number) {
+  return {
+    x: sidebarWidth + (window.innerWidth - sidebarWidth) / 2,
+    y: window.innerHeight / 2,
+  }
+}
+
+export function fitViewAfterNodeMount(fitView: (options: { duration?: number; padding?: number }) => void, padding = 0.18) {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      fitView({ duration: 300, padding })
+    })
+  })
 }
 
 const toolbarItems = [
@@ -91,6 +113,8 @@ export function SidebarToolbar({ onOpenMaterials, activePanel, onOpenPanel }: Si
   const menuRef = useRef<HTMLDivElement>(null)
   const addNode = useFlowStore((state) => state.addNode)
   const { screenToFlowPosition } = useReactFlow()
+  const sidebarCollapsed = useProjectStore((s) => s.sidebarCollapsed)
+  const sidebarWidth = sidebarCollapsed ? 0 : 240
 
   // ── Close add menu on outside click ──
   useEffect(() => {
@@ -117,14 +141,11 @@ export function SidebarToolbar({ onOpenMaterials, activePanel, onOpenPanel }: Si
   }, [showAddMenu])
 
   const handleAddNode = useCallback((type: NodeType) => {
-    const position = screenToFlowPosition({
-      x: window.innerWidth / 2,
-      y: window.innerHeight / 2,
-    })
+    const position = screenToFlowPosition(canvasCenterScreenPoint(sidebarWidth))
     addNode(type, position, nodeInitialData(type))
     setShowAddMenu(false)
     setSearchQuery('')
-  }, [addNode, screenToFlowPosition])
+  }, [addNode, screenToFlowPosition, sidebarWidth])
 
   const handleDragStart = (event: React.DragEvent, type: NodeType) => {
     event.dataTransfer.setData('application/reactflow', type)
@@ -143,10 +164,8 @@ export function SidebarToolbar({ onOpenMaterials, activePanel, onOpenPanel }: Si
       if (!nodeType) return
 
       const url = URL.createObjectURL(file)
-      const position = screenToFlowPosition({
-        x: window.innerWidth / 2 + i * 40,
-        y: window.innerHeight / 2 + i * 40,
-      })
+      const center = canvasCenterScreenPoint(sidebarWidth)
+      const position = screenToFlowPosition({ x: center.x + i * 40, y: center.y + i * 40 })
 
       const mediaData =
         nodeType === 'image' ? { imageUrl: url }
@@ -162,7 +181,7 @@ export function SidebarToolbar({ onOpenMaterials, activePanel, onOpenPanel }: Si
       })
     })
     setShowAddMenu(false)
-  }, [addNode, screenToFlowPosition])
+  }, [addNode, screenToFlowPosition, sidebarWidth])
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.length) handleFiles(e.target.files)
@@ -170,11 +189,11 @@ export function SidebarToolbar({ onOpenMaterials, activePanel, onOpenPanel }: Si
   }
 
   return (
-    <div className="fixed left-1/2 bottom-6 z-50 -translate-x-1/2 flex flex-col items-center gap-3">
+    <div className="fixed left-1/2 bottom-6 z-50 -translate-x-1/2 flex max-w-[calc(100vw-24px)] flex-col items-center gap-3">
       {/* ── Main Toolbar Pill ── */}
-      <div className="glass flex items-center gap-0.5 rounded-full px-1.5 py-1.5 shadow-2xl ring-1 ring-border/40">
+      <div ref={menuRef} className="glass flex max-w-full items-center gap-0.5 rounded-full px-1.5 py-1.5 shadow-2xl ring-1 ring-border/40">
         {/* Add Node Button */}
-        <div className="relative" ref={menuRef}>
+        <div className="relative">
           <PillButton
             icon={showAddMenu ? X : Plus}
             label={showAddMenu ? '关闭菜单' : '添加节点'}
@@ -183,100 +202,51 @@ export function SidebarToolbar({ onOpenMaterials, activePanel, onOpenPanel }: Si
             onClick={() => { setShowAddMenu(!showAddMenu); setSearchQuery('') }}
             rotate={showAddMenu}
           />
-
-          {/* ── Flyout Add Menu ── */}
-          {showAddMenu && (
-            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-[320px] glass rounded-2xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-bottom-2 zoom-in-95 duration-150 origin-bottom">
-              {/* Search */}
-              <div className="px-3 pt-3">
-                <div className="relative">
-                  <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/50" />
-                  <input
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="搜索节点类型…"
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => e.stopPropagation()}
-                    className="w-full rounded-xl border border-border/40 bg-muted/30 py-2 pl-8 pr-3 text-[12px] text-foreground placeholder:text-muted-foreground/40 focus:border-primary/40 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              {/* Node type list */}
-              <div className="px-2 pt-2 pb-1">
-                <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
-                  AI 工具节点
-                </div>
-                {filteredNodeOptions.map((opt) => (
-                  <button
-                    key={opt.type}
-                    draggable
-                    onDragStart={(e) => handleDragStart(e, opt.type)}
-                    onClick={() => handleAddNode(opt.type)}
-                    title="点击添加 · 可拖拽到画布指定位置"
-                    className="group flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-all duration-150 hover:bg-muted/60 active:scale-[0.98]"
-                  >
-                    <div className={cn(
-                      'flex size-8 shrink-0 items-center justify-center rounded-xl transition-colors',
-                      opt.bgClass
-                    )}>
-                      <opt.icon className={cn('size-3.5', opt.color)} />
-                    </div>
-                    <span className="flex-1 text-left text-[12.5px] font-medium">{opt.label}</span>
-                    {opt.beta && (
-                      <span className="rounded-md bg-blue-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-blue-400">
-                        Beta
-                      </span>
-                    )}
-                    <span className="text-[9px] text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100">
-                      ⌘
-                    </span>
-                  </button>
-                ))}
-                {filteredNodeOptions.length === 0 && (
-                  <div className="py-6 text-center text-[11px] text-muted-foreground/60">
-                    没有匹配的节点类型
-                  </div>
-                )}
-              </div>
-
-              {/* Divider */}
-              <div className="mx-3 my-1 border-t border-border/40" />
-
-              {/* Resource section */}
-              <div className="px-2 pb-3 pt-1">
-                <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
-                  素材导入
-                </div>
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="group flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-all duration-150 hover:bg-muted/60 active:scale-[0.98]"
-                >
-                  <div className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-muted/60 group-hover:bg-muted transition-colors">
-                    <Upload className="size-3.5 text-muted-foreground" />
-                  </div>
-                  <div className="flex flex-col items-start">
-                    <span className="text-[12.5px] font-medium">上传文件</span>
-                    <span className="text-[10px] text-muted-foreground/60">图片 · 视频 · 音频</span>
-                  </div>
-                </button>
-
-                <button
-                  onClick={() => { onOpenMaterials(); setShowAddMenu(false) }}
-                  className="group flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-all duration-150 hover:bg-muted/60 active:scale-[0.98]"
-                >
-                  <div className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-muted/60 group-hover:bg-muted transition-colors">
-                    <ImageLibrary className="size-3.5 text-muted-foreground" />
-                  </div>
-                  <span className="text-[12.5px] font-medium">从素材库选择</span>
-                </button>
-              </div>
-            </div>
-          )}
         </div>
 
+        {/* ── Inline Add Menu ── */}
+        {showAddMenu && (
+          <div className="flex min-w-0 max-w-[calc(100vw-84px)] flex-wrap items-center gap-0.5 overflow-visible border-l border-border/40 pl-1 animate-in fade-in slide-in-from-left-2 duration-150">
+            <div className="relative shrink-0">
+              <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground/50" />
+              <input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="搜索"
+                aria-label="搜索节点类型"
+                onPointerDown={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+                className="h-8 w-20 rounded-full border border-border/40 bg-muted/30 pl-6 pr-2 text-[11px] text-foreground placeholder:text-muted-foreground/40 focus:border-primary/40 focus:outline-none"
+              />
+            </div>
+            {filteredNodeOptions.map((opt) => (
+              <PillButton
+                key={opt.type}
+                icon={opt.icon}
+                label={opt.label}
+                active={false}
+                onClick={() => handleAddNode(opt.type)}
+                draggable
+                onDragStart={(e) => handleDragStart(e, opt.type)}
+                iconClassName={opt.color}
+              />
+            ))}
+            <span className="mx-1 h-4 w-px shrink-0 bg-border/40" />
+            <PillButton
+              icon={Upload}
+              label="上传文件"
+              onClick={() => fileInputRef.current?.click()}
+            />
+            <PillButton
+              icon={ImageLibrary}
+              label="从素材库选择"
+              onClick={() => { onOpenMaterials(); setShowAddMenu(false) }}
+            />
+          </div>
+        )}
+
         {/* Pill divider dot */}
-        <span className="mx-1 h-4 w-px bg-border/40" />
+        {!showAddMenu && <span className="mx-1 h-4 w-px bg-border/40" />}
 
         {/* Tool Items */}
         {toolbarItems.map((item) => (
@@ -324,6 +294,9 @@ function PillButton({
   active,
   onClick,
   rotate,
+  draggable,
+  onDragStart,
+  iconClassName,
 }: {
   icon: typeof Plus
   label: string
@@ -331,10 +304,16 @@ function PillButton({
   active?: boolean
   onClick?: () => void
   rotate?: boolean
+  draggable?: boolean
+  onDragStart?: (event: React.DragEvent<HTMLButtonElement>) => void
+  iconClassName?: string
 }) {
   return (
     <button
       onClick={onClick}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      aria-label={label}
       className={cn(
         'group/pb relative flex size-9 items-center justify-center rounded-full transition-all duration-200',
         active
@@ -347,25 +326,25 @@ function PillButton({
         rotate && 'rotate-45',
         !active && 'group-hover/pb:scale-110'
       )}>
-        <Icon className="size-4" />
+        <Icon className={cn('size-4', iconClassName)} />
       </span>
 
       {/* ── Floating tooltip above pill ── */}
       <div className={cn(
-        'pointer-events-none absolute bottom-full left-1/2 mb-2 -translate-x-1/2',
-        'flex items-center gap-2 rounded-xl bg-popover px-3 py-1.5 shadow-xl border border-border/50',
+        'pointer-events-none absolute bottom-full left-1/2 z-[80] mb-2 -translate-x-1/2',
+        'flex items-center gap-2 rounded-md border border-white/10 bg-[#1b1b1b] px-2.5 py-1 shadow-xl',
         'opacity-0 translate-y-1 transition-all duration-200',
         'group-hover/pb:opacity-100 group-hover/pb:translate-y-0',
         active && '!opacity-0',
       )}>
-        <span className="whitespace-nowrap text-[12px] font-medium text-foreground">{label}</span>
+        <span className="whitespace-nowrap text-[11px] font-medium text-white">{label}</span>
         {shortcut && (
           <kbd className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground">
             {shortcut}
           </kbd>
         )}
         {/* Arrow */}
-        <span className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-full border-[5px] border-transparent border-t-popover" />
+        <span className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-full border-[5px] border-transparent border-t-[#1b1b1b]" />
       </div>
     </button>
   )

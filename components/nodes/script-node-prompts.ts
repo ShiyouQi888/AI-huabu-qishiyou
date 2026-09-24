@@ -60,6 +60,14 @@ export const DRAMA_TEMPLATE_FORMULAS: Record<string, string[]> = {
   '穿越古代': ['现代认知进入古代困局', '用现代技能破局', '卷入权力/家族斗争', '建立盟友与情感线', '反派借规则压制', '用制度差反杀', '改写命运并站稳身份'],
   '替嫁真千金': ['被迫替嫁/真假身份错位', '婚后冷遇与试探', '真能力/真身份露出', '假千金或家族陷害', '男主立场摇摆后偏爱', '身份真相爆发', '清算冒名者并获得承认'],
   '闪婚契约': ['意外闪婚/协议绑定', '生活磨合与边界感', '契约关系被外界挑战', '共同解决危机', '假戏真做但不承认', '契约到期制造分离', '主动续约变真爱'],
+  '双面娇妻': ['表面平凡身份掩饰', '危机中意外展露专业能力', '身边人震惊重新审视', '旧势力或前任前来挑衅', '双重身份被迫周旋', '关键时刻两个身份合力', '真实身份公开获得认可'],
+  '马甲大佬': ['刻意低调隐藏真实身份', '被家人或同事轻视误解', '小范围亮出实力震慑', '外部势力挑战底线', '多层马甲逐一揭开', '终极对手引出真正身份', '身份公开震惊全场并清算'],
+  '龙王赘婿': ['入赘受尽白眼羞辱', '暗中身怀通天实力', '岳家危机被迫小露一手', '仇家或大能寻仇上门', '妻子或岳家逐渐了解真相', '惊天身份震慑各方势力', '守护家族并执掌权柄'],
+  '校园重生': ['带着遗憾重生回到校园', '利用先知调整关键选择', '修复前世错过的感情或友情', '旧日仇怨或竞争对手重现', '避开前世致命陷阱', '关键考试或比赛逆风翻盘', '改写命运走向更好结局'],
+  '恶女翻身': ['被诬陷背负恶名', '众叛亲离陷入绝境', '意外获得转机或帮手', '暗中收集证据洗清嫌疑', '陷害者步步紧逼加码', '关键时刻真相当众揭露', '沉冤得雪迎来清算与新生'],
+  '亿万甜妻': ['隐藏富家身份低调生活', '被误会攀附或轻视', '危机中财富或人脉浮出水面', '真实身份引发追求者云集', '前任或阶层压力测试感情', '甜蜜互动化解重重危机', '身份公开修成正果'],
+  '战神归来': ['退役隐姓埋名过普通生活', '被昔日战友或敌人认出', '家人或爱人身陷危机', '出手相救暴露一角实力', '旧敌集结前来复仇', '战场重现碾压式反击', '荣耀归位获得应有尊重'],
+  '隐婚试爱': ['意外或协议隐婚不敢公开', '同事朋友身份掩饰制造误会', '外部追求者制造感情危机', '朝夕相处日久生情', '隐婚真相濒临暴露', '危机时刻挺身守护', '公开身份坦诚相待终成眷属'],
 }
 
 export function getDramaTemplateFormula(template: string): string[] {
@@ -215,6 +223,8 @@ export function buildDramaEpisodesBatchPrompt(p: {
   characters: Array<{ name: string; role?: string; appearance?: string; personality?: string }>
   content: string
   previousCliffhanger?: string
+  /** Rolling continuity digest from lib/drama-world-state.ts — hard constraints + recent episode recap. */
+  worldStateSummary?: string
 }): PromptPair {
   const formula = getDramaTemplateFormula(p.template)
   return {
@@ -243,6 +253,7 @@ ${DRAMA_QUALITY_TARGET}
 【爽点类型】${p.satisfactionType || '综合爽点'}
 【模板结构公式】${formula.join(' → ')}
 【每集时长】${p.episodeDuration}秒
+${p.worldStateSummary ? `【连续性提要】\n${p.worldStateSummary}` : ''}
 ${p.previousCliffhanger ? `【上一集结尾悬念】${p.previousCliffhanger}` : ''}
 
 请继续生成第${p.from}集到第${p.to}集的详细分集大纲，ep字段必须为真实集号（${p.from}…${p.to}），与前文剧情连贯。`,
@@ -255,6 +266,8 @@ export function buildEpisodeScriptPrompt(p: {
   episodeDuration: number
   characters: Array<{ name: string; role?: string; appearance?: string }>
   locations: string[]
+  /** Rolling continuity digest from lib/drama-world-state.ts — hard constraints + recent episode recap. */
+  worldStateSummary?: string
 }): PromptPair {
   const beatList = (p.episode.beats ?? []).map((b, i) => `${i + 1}. ${b}`).join('\n')
   const minShots = Math.ceil(p.episodeDuration / 7)
@@ -294,6 +307,7 @@ ${beatList}
 【结尾悬念】${p.episode.cliffhanger ?? ''}
 【可用角色】${p.characters.map((c) => c.name).join('、') || '（无固定角色）'}
 【可用场景】${p.locations.join('、') || '（可自行合理设定）'}
+${p.worldStateSummary ? `【连续性提要】\n${p.worldStateSummary}` : ''}
 
 请生成本集完整剧本。`,
   }
@@ -417,14 +431,26 @@ export function buildDramaRewriteByQualityPrompt(p: {
   episodeDuration: number
   template?: string
   qualityReport?: DramaQualityReport
+  /**
+   * Optional batching range — rewriting all N episodes in one call scales badly (a 20+
+   * episode season can overrun any maxTokens budget before the model finishes, especially
+   * on reasoning models). When set, only episodes [rewriteFrom, rewriteTo] are rewritten;
+   * the rest are passed as read-only context for continuity.
+   */
+  rewriteFrom?: number
+  rewriteTo?: number
 }): PromptPair {
   const formula = p.template ? getDramaTemplateFormula(p.template) : []
+  const isBatch = p.rewriteFrom !== undefined && p.rewriteTo !== undefined
+  const batchEpisodes = isBatch ? p.episodes.filter((e) => e.ep >= p.rewriteFrom! && e.ep <= p.rewriteTo!) : p.episodes
+  const contextEpisodes = isBatch ? p.episodes.filter((e) => e.ep < p.rewriteFrom! || e.ep > p.rewriteTo!) : []
+  const batchCount = isBatch ? p.rewriteTo! - p.rewriteFrom! + 1 : p.episodes.length
   return {
-    system: `你是短剧总编剧，负责根据质检报告对整部短剧分集大纲进行专业改稿。
+    system: `你是短剧总编剧，负责根据质检报告对${isBatch ? '短剧分集大纲的一部分' : '整部短剧分集大纲'}进行专业改稿。
 
 改稿原则：
 1. 保留剧名、世界观、主要角色，不要推翻故事圣经
-2. 严格保留总集数和每一集ep编号
+2. ${isBatch ? `本次只重写第${p.rewriteFrom}集到第${p.rewriteTo}集，只返回这个区间的episodes，不要包含其他集数；ep编号必须严格为${p.rewriteFrom}到${p.rewriteTo}` : '严格保留总集数和每一集ep编号'}
 3. 按质检报告重点修复：钩子弱、爽点不足、动机不清、悬念不强、可生成性差等问题
 4. 每集都要有更明确的前5秒钩子、剧情推进、爽点和悬念
 5. ${formula.length ? `继续遵守模板结构公式：${formula.join(' → ')}` : '继续遵守原有类型结构'}
@@ -438,9 +464,9 @@ ${DRAMA_QUALITY_TARGET}
 - 保持集数不变，但允许重排单集内部beats来提升节奏
 
 严格按JSON返回，不要有任何其他内容。字符串值内部不要使用英文双引号 "，如需引用称谓/台词/片名，请使用中文引号「」：
-{
+{${isBatch ? '' : `
   "synopsis": "改稿后的故事概要",
-  "content": "改稿后的世界观 + 人物关系 + 整体剧情走向",
+  "content": "改稿后的世界观 + 人物关系 + 整体剧情走向",`}
   "episodes": [
     {
       "ep": 1,
@@ -458,12 +484,14 @@ ${DRAMA_QUALITY_TARGET}
 【角色】${p.characters.map((c) => `${c.name}（${c.role ?? ''}，${c.personality ?? ''}）`).join('；')}
 【当前概要】${p.synopsis}
 【当前整体走向】${p.content}
-【当前分集大纲】
-${JSON.stringify(p.episodes, null, 2)}
-【质检报告】
+【${isBatch ? `待改稿分集（第${p.rewriteFrom}-${p.rewriteTo}集）` : '当前分集大纲'}】
+${JSON.stringify(batchEpisodes, null, 2)}
+${isBatch ? `【其他集数摘要（仅供连贯性参考，不要重写，不要返回）】\n${JSON.stringify(contextEpisodes.map((e) => ({ ep: e.ep, title: e.title, cliffhanger: e.cliffhanger })), null, 2)}\n` : ''}【质检报告】
 ${JSON.stringify(p.qualityReport ?? {}, null, 2)}
 
-请按质检报告重写全剧分集大纲，episodes数量必须仍为${p.episodes.length}集，ep编号必须从1到${p.episodes.length}连续。`,
+${isBatch
+  ? `请按质检报告重写第${p.rewriteFrom}-${p.rewriteTo}集，episodes数量必须为${batchCount}集，ep编号必须为${p.rewriteFrom}到${p.rewriteTo}连续。`
+  : `请按质检报告重写全剧分集大纲，episodes数量必须仍为${batchCount}集，ep编号必须从1到${batchCount}连续。`}`,
   }
 }
 
@@ -580,8 +608,16 @@ ${p.episode.script ? `【已生成单集剧本】\n${p.episode.script}\n` : ''}
 
 // ─── Movie ────────────────────────────────────────────────────────────────────
 
+export const MOVIE_TEMPLATE_FORMULAS: Record<string, string[]> = {
+  '英雄之旅': ['平凡世界与召唤', '拒绝与跨越', '试炼与深渊', '蜕变高潮', '带着蜕变归来'],
+  '悲剧宿命': ['命运伏笔', '追求与短暂辉煌', '致命缺陷显现', '崩塌', '代价清算'],
+  '双线交织': ['两条时空引入', '交替推进呼应', '关键交汇点', '真相合流', '情感闭环'],
+  '复仇之路': ['创伤事件', '隐忍布局', '渗透接近', '阶段反击', '终极清算'],
+}
+
 export function buildMoviePrompt(p: {
   genre: string
+  template: string
   arcStart: string
   arcEnd: string
   conflict: string
@@ -592,6 +628,7 @@ export function buildMoviePrompt(p: {
 }): PromptPair {
   const mid = Math.round(p.duration / 2)
   const dark = Math.round(p.duration * 0.75)
+  const formula = MOVIE_TEMPLATE_FORMULAS[p.template] ?? MOVIE_TEMPLATE_FORMULAS['英雄之旅']
   return {
     system: `你是专业电影编剧，精通三幕式剧本结构。
 
@@ -601,6 +638,7 @@ export function buildMoviePrompt(p: {
 - 第三幕（后25%）：高潮决战，结局完成主角弧线
 - 每个转折点必须明确（激励事件/中点/黑暗时刻/高潮）
 - 主题通过角色行动表达，不要说教
+- 叙事模板「${p.template}」：整体走向必须贴合结构公式 ${formula.join(' → ')}
 
 严格按JSON返回：
 {
@@ -623,6 +661,7 @@ export function buildMoviePrompt(p: {
   "content": "完整故事梗概（含所有关键情节转折和结局）"
 }`,
     user: `【类型/风格】${p.genre}
+【叙事模板】${p.template}（${formula.join(' → ')}）
 【主角弧线起点】${p.arcStart || '由AI根据故事设计'}
 【主角弧线终点】${p.arcEnd || '由AI根据故事设计'}
 【核心冲突】${p.conflict || '由AI根据故事设计'}
@@ -637,13 +676,22 @@ export function buildMoviePrompt(p: {
 
 // ─── Micro-film ───────────────────────────────────────────────────────────────
 
+export const MICROFILM_TEMPLATE_FORMULAS: Record<string, string[]> = {
+  '一瞬顿悟': ['日常倦怠', '细微裂缝', '触发事件', '内心翻涌', '顿悟与留白'],
+  '错过与重逢': ['曾经错过', '各自生活', '意外重逢', '旧情翻涌', '选择与告别'],
+  '平凡英雄': ['卑微处境', '隐忍付出', '无人知晓的坚持', '关键时刻挺身', '归于平凡'],
+  '告别信': ['离别在即', '回忆闪回', '未说出口的话', '最后时刻告别', '释怀'],
+}
+
 export function buildMicrofilmPrompt(p: {
   coreEmotion: string
+  template: string
   pov: string
   endingMood: string
   duration: number
   brief: string
 }): PromptPair {
+  const formula = MICROFILM_TEMPLATE_FORMULAS[p.template] ?? MICROFILM_TEMPLATE_FORMULAS['一瞬顿悟']
   return {
     system: `你是微电影编剧，擅长在${p.duration}分钟内讲述一个完整的、情感饱满的故事。
 
@@ -652,6 +700,7 @@ export function buildMicrofilmPrompt(p: {
 - 情感节拍清晰：建立→变化→冲突→释放→余韵
 - 视觉化表达：多用画面动作传递情感，少用直白对话
 - 结尾必须有明确的情绪释放点
+- 叙事模板「${p.template}」：情感节拍需贴合结构公式 ${formula.join(' → ')}
 
 严格按JSON返回：
 {
@@ -672,6 +721,7 @@ export function buildMicrofilmPrompt(p: {
   "content": "完整故事梗概 + 视觉主题建议"
 }`,
     user: `【核心情感】${p.coreEmotion}
+【叙事模板】${p.template}（${formula.join(' → ')}）
 【叙事视角】${p.pov}
 【结局情绪】${p.endingMood}
 【时长】${p.duration}分钟
@@ -681,13 +731,22 @@ export function buildMicrofilmPrompt(p: {
 
 // ─── Short Video ─────────────────────────────────────────────────────────────
 
+export const SV_TEMPLATE_FORMULAS: Record<string, string[]> = {
+  '强反转': ['常规开场建立预期', '突然反转', '反转后信息释放', '结尾钩子'],
+  '数据冲击': ['惊人数字开场', '制造好奇', '逐层解释对比', '总结金句'],
+  '争议观点': ['抛出争议观点', '预判反对声音', '逐条论证', '反常识结论与互动引导'],
+  '沉浸故事': ['强代入开场', '冲突升级', '情绪顶点反转', '行动召唤'],
+}
+
 export function buildShortVideoPrompt(p: {
   platform: string
+  template: string
   hookType: string
   duration: number
   purpose: string
   brief: string
 }): PromptPair {
+  const formula = SV_TEMPLATE_FORMULAS[p.template] ?? SV_TEMPLATE_FORMULAS['强反转']
   return {
     system: `你是专业短视频策划，精通${p.platform}平台内容创作。
 
@@ -696,6 +755,7 @@ export function buildShortVideoPrompt(p: {
 - 每5-8秒一个信息点或情绪变化，绝不留废话镜头
 - 结尾设计情绪释放点或明确的互动引导
 - 旁白/字幕口语化、有节奏感，配合画面节奏
+- 内容模板「${p.template}」：整体节奏必须贴合结构公式 ${formula.join(' → ')}
 
 严格按JSON返回：
 {
@@ -710,6 +770,7 @@ export function buildShortVideoPrompt(p: {
   "content": "拍摄要点和制作注意事项"
 }`,
     user: `【平台】${p.platform}
+【内容模板】${p.template}（${formula.join(' → ')}）
 【时长】${p.duration}秒
 【钩子类型】${p.hookType}
 【内容目的】${p.purpose}
@@ -721,7 +782,14 @@ export function buildShortVideoPrompt(p: {
 
 // ─── Vlog ─────────────────────────────────────────────────────────────────────
 
-export function buildVlogPrompt(p: { vlogType: string; platform: string; duration: number; brief: string }): PromptPair {
+export const VLOG_TEMPLATE_FORMULAS: Record<string, string[]> = {
+  '事件驱动': ['目标计划开场', '过程记录', '意外插曲应对', '结果与感悟'],
+  '沉浸日常': ['开场氛围', '碎片化记录', '情绪旁白', '高光片段与感悟'],
+  '探店测评': ['期待开场', '到店体验细节', '真实评价', '推荐总结'],
+}
+
+export function buildVlogPrompt(p: { vlogType: string; template: string; platform: string; duration: number; brief: string }): PromptPair {
+  const formula = VLOG_TEMPLATE_FORMULAS[p.template] ?? VLOG_TEMPLATE_FORMULAS['事件驱动']
   return {
     system: `你是Vlog内容策划，擅长设计真实感、有故事感的${p.vlogType}Vlog。
 
@@ -730,6 +798,7 @@ export function buildVlogPrompt(p: { vlogType: string; platform: string; duratio
 - 贯穿一条情感线索或故事线，不是流水账
 - 设计3-5个情绪高点（惊喜/感动/搞笑时刻）
 - 旁白自然口语化，像在跟好友分享
+- 叙事模板「${p.template}」：整体走向必须贴合结构公式 ${formula.join(' → ')}
 
 严格按JSON返回：
 {
@@ -745,6 +814,7 @@ export function buildVlogPrompt(p: { vlogType: string; platform: string; duratio
   "content": "完整脚本框架和拍摄注意事项"
 }`,
     user: `【Vlog类型】${p.vlogType}
+【叙事模板】${p.template}（${formula.join(' → ')}）
 【目标平台】${p.platform}
 【时长】${p.duration}分钟
 【内容方向】${p.brief}`,
@@ -753,7 +823,14 @@ export function buildVlogPrompt(p: { vlogType: string; platform: string; duratio
 
 // ─── Live Stream ──────────────────────────────────────────────────────────────
 
-export function buildLivestreamPrompt(p: { streamType: string; purpose: string; duration: number; brief: string }): PromptPair {
+export const STREAM_TEMPLATE_FORMULAS: Record<string, string[]> = {
+  '开场留人': ['强钩子开场', '自我产品介绍', '互动破冰', '价值展示促单'],
+  '专家权威': ['专业背书开场', '痛点共鸣', '干货输出', '答疑转化'],
+  '沉浸带货': ['场景化开场', '产品故事', '实测展示', '限时利益催单'],
+}
+
+export function buildLivestreamPrompt(p: { streamType: string; template: string; purpose: string; duration: number; brief: string }): PromptPair {
+  const formula = STREAM_TEMPLATE_FORMULAS[p.template] ?? STREAM_TEMPLATE_FORMULAS['开场留人']
   return {
     system: `你是直播策划专家，擅长设计「${p.streamType}」类型直播的运营脚本。
 
@@ -762,6 +839,7 @@ export function buildLivestreamPrompt(p: { streamType: string; purpose: string; 
 - 设计观众互动节点（提问/投票/秒杀等）
 - 关键话术要写出来，不能只写"介绍产品"
 - 开场前5分钟是留住观众的关键
+- 流程模板「${p.template}」：环节设计必须贴合结构公式 ${formula.join(' → ')}
 
 严格按JSON返回：
 {
@@ -776,6 +854,7 @@ export function buildLivestreamPrompt(p: { streamType: string; purpose: string; 
   "content": "完整直播流程单（含时间轴）"
 }`,
     user: `【直播类型】${p.streamType}
+【流程模板】${p.template}（${formula.join(' → ')}）
 【核心目的】${p.purpose}
 【时长】${p.duration}小时
 【内容方向】${p.brief}`,
@@ -784,9 +863,17 @@ export function buildLivestreamPrompt(p: { streamType: string; purpose: string; 
 
 // ─── Advertisement ────────────────────────────────────────────────────────────
 
-export function buildAdPrompt(p: { appealType: string; audience: string; duration: number; brief: string }): PromptPair {
+export const AD_TEMPLATE_FORMULAS: Record<string, string[]> = {
+  '痛点解决': ['痛点场景', '情绪放大', '产品介入', '效果对比行动号召'],
+  '情感共鸣': ['情感场景铺垫', '情绪积累', '品牌自然融入', '情感升华落版'],
+  '幽默反差': ['常规预期', '荒诞反差', '产品揭晓', '会心一笑记忆点'],
+}
+
+export function buildAdPrompt(p: { appealType: string; template: string; audience: string; duration: number; brief: string }): PromptPair {
+  const formula = AD_TEMPLATE_FORMULAS[p.template] ?? AD_TEMPLATE_FORMULAS['痛点解决']
   return {
     system: `你是专业广告创意总监，擅长创作「${p.appealType}」类型的广告。
+创意模板「${p.template}」：整体走向必须贴合结构公式 ${formula.join(' → ')}
 
 广告创作规则：
 - 前3秒必须抓住目标受众注意力
@@ -808,6 +895,7 @@ export function buildAdPrompt(p: { appealType: string; audience: string; duratio
   "content": "创意说明 + 拍摄风格建议"
 }`,
     user: `【诉求方式】${p.appealType}
+【创意模板】${p.template}（${formula.join(' → ')}）
 【目标受众】${p.audience || '目标消费者'}
 【时长】${p.duration}秒
 【产品/创意方向】${p.brief}`,
@@ -816,7 +904,14 @@ export function buildAdPrompt(p: { appealType: string; audience: string; duratio
 
 // ─── Promotional Video ────────────────────────────────────────────────────────
 
-export function buildPromoPrompt(p: { subjectType: string; style: string; duration: number; brief: string }): PromptPair {
+export const PROMO_TEMPLATE_FORMULAS: Record<string, string[]> = {
+  '史诗展示': ['宏大开场', '底蕴铺垫', '成就展示细节特写', '愿景升华收尾'],
+  '人物群像': ['多人物切片', '共同主题浮现', '情感汇聚', '核心信息落版'],
+  '数据成就': ['现状引入', '关键数据里程碑', '未来展望', '行动号召'],
+}
+
+export function buildPromoPrompt(p: { subjectType: string; template: string; style: string; duration: number; brief: string }): PromptPair {
+  const formula = PROMO_TEMPLATE_FORMULAS[p.template] ?? PROMO_TEMPLATE_FORMULAS['史诗展示']
   return {
     system: `你是宣传片策划专家，擅长创作「${p.subjectType}」类型的宣传片。
 
@@ -825,6 +920,7 @@ export function buildPromoPrompt(p: { subjectType: string; style: string; durati
 - 按信息层级展开：核心价值 → 具体亮点 → 愿景/召唤
 - 解说词有节奏感，句子有力，不堆砌形容词
 - 画面建议要可执行（不要"宏伟大气"这种废话描述）
+- 结构模板「${p.template}」：章节安排必须贴合结构公式 ${formula.join(' → ')}
 
 严格按JSON返回：
 {
@@ -838,6 +934,7 @@ export function buildPromoPrompt(p: { subjectType: string; style: string; durati
   "content": "整体策划思路 + 拍摄风格建议"
 }`,
     user: `【宣传主体类型】${p.subjectType}
+【结构模板】${p.template}（${formula.join(' → ')}）
 【风格】${p.style}
 【时长】${p.duration}分钟
 【宣传内容/方向】${p.brief}`,
@@ -846,7 +943,14 @@ export function buildPromoPrompt(p: { subjectType: string; style: string; durati
 
 // ─── MV ──────────────────────────────────────────────────────────────────────
 
-export function buildMVPrompt(p: { mvType: string; aesthetic: string; brief: string }): PromptPair {
+export const MV_TEMPLATE_FORMULAS: Record<string, string[]> = {
+  '情绪递进': ['低落铺垫画面', '情绪积累', '副歌爆发高潮', '意象余韵收尾'],
+  '叙事闭环': ['故事引入', '冲突发展', '情感高潮', '结局呼应开场升华'],
+  '概念意象': ['核心意象建立', '意象变奏', '抽象高潮', '意象回归留白'],
+}
+
+export function buildMVPrompt(p: { mvType: string; template: string; aesthetic: string; brief: string }): PromptPair {
+  const formula = MV_TEMPLATE_FORMULAS[p.template] ?? MV_TEMPLATE_FORMULAS['情绪递进']
   return {
     system: `你是MV导演兼策划，擅长创作「${p.mvType}」类型的音乐视频。
 
@@ -855,6 +959,7 @@ MV创作规则：
 - 段落（verse/chorus/bridge）对应不同视觉能量
 - 副歌段必须是视觉高潮，画面冲击力最强
 - ${p.mvType === '叙事故事' ? '故事线要清晰，情绪随歌曲走' : '概念要有内在逻辑，不是随机堆砌'}
+- 结构模板「${p.template}」：段落编排必须贴合结构公式 ${formula.join(' → ')}
 
 严格按JSON返回：
 {
@@ -869,6 +974,7 @@ MV创作规则：
   "content": "完整MV策划 + 拍摄执行建议"
 }`,
     user: `【MV类型】${p.mvType}
+【结构模板】${p.template}（${formula.join(' → ')}）
 【美学风格】${p.aesthetic}
 【歌曲方向/歌词主题】${p.brief}`,
   }
@@ -876,7 +982,13 @@ MV创作规则：
 
 // ─── Motion Poster ────────────────────────────────────────────────────────────
 
-export function buildMotionPosterPrompt(p: { posterType: string; visualStyle: string; duration: number; brief: string }): PromptPair {
+export const POSTER_TEMPLATE_FORMULAS: Record<string, string[]> = {
+  '悬念揭晓': ['悬念画面', '信息逐层浮现', '核心卖点视觉高潮', '行动号召'],
+  '冲击开场': ['强视觉冲击', '核心信息闪现', '细节展示', '品牌落版'],
+}
+
+export function buildMotionPosterPrompt(p: { posterType: string; template: string; visualStyle: string; duration: number; brief: string }): PromptPair {
+  const formula = POSTER_TEMPLATE_FORMULAS[p.template] ?? POSTER_TEMPLATE_FORMULAS['悬念揭晓']
   return {
     system: `你是动态海报设计师，专注创作「${p.posterType}」类型的动态海报。
 
@@ -885,6 +997,7 @@ export function buildMotionPosterPrompt(p: { posterType: string; visualStyle: st
 - 动画节奏要有层次：元素逐步出现，而非同时爆发
 - 文字动画是重点，要有设计感
 - 循环播放友好（结尾可以过渡回开头）
+- 节奏模板「${p.template}」：时间轴编排必须贴合结构公式 ${formula.join(' → ')}
 
 严格按JSON返回：
 {
@@ -900,6 +1013,7 @@ export function buildMotionPosterPrompt(p: { posterType: string; visualStyle: st
   "content": "完整设计说明 + 制作技术建议"
 }`,
     user: `【海报类型】${p.posterType}
+【节奏模板】${p.template}（${formula.join(' → ')}）
 【视觉风格】${p.visualStyle}
 【时长】${p.duration}秒
 【主题/内容方向】${p.brief}`,
@@ -907,10 +1021,21 @@ export function buildMotionPosterPrompt(p: { posterType: string; visualStyle: st
 }
 
 // ─── Documentary ─────────────────────────────────────────────────────────────
+// Documentary's existing "structure" pick (时间线叙事/人物追踪/主题章节/问题-回答式) already
+// is a narrative-template choice, so it gets a formula lookup instead of a new field.
+
+export const DOC_STRUCTURE_FORMULAS: Record<string, string[]> = {
+  '时间线叙事': ['起点回溯', '关键节点串联', '现状呈现', '未来展望'],
+  '人物追踪': ['人物引入困境', '关键时刻跟拍', '转折', '现状与反思'],
+  '主题章节': ['主题提出', '分章节论证', '交叉印证', '主题升华'],
+  '问题-回答式': ['抛出问题', '背景铺垫', '多方视角探索证据', '观点升华开放收尾'],
+}
 
 export function buildDocumentaryPrompt(p: { docType: string; structure: string; duration: number; brief: string }): PromptPair {
+  const formula = DOC_STRUCTURE_FORMULAS[p.structure] ?? DOC_STRUCTURE_FORMULAS['问题-回答式']
   return {
     system: `你是纪录片策划，擅长创作「${p.docType}」类型的纪录片，采用「${p.structure}」结构。
+结构公式：${formula.join(' → ')}
 
 纪录片创作规则：
 - 必须有清晰的核心命题（这部片想回答什么问题/探索什么主题）
@@ -940,7 +1065,13 @@ export function buildDocumentaryPrompt(p: { docType: string; structure: string; 
 
 // ─── Tutorial ─────────────────────────────────────────────────────────────────
 
-export function buildTutorialPrompt(p: { level: string; teachStyle: string; platform: string; duration: number; brief: string }): PromptPair {
+export const TUT_TEMPLATE_FORMULAS: Record<string, string[]> = {
+  '问题导向': ['常见痛点', '原理简述', '分步演示', '易错提醒与成果验收'],
+  '由浅入深': ['基础概念', '简单示例', '进阶技巧', '综合应用总结'],
+}
+
+export function buildTutorialPrompt(p: { level: string; template: string; teachStyle: string; platform: string; duration: number; brief: string }): PromptPair {
+  const formula = TUT_TEMPLATE_FORMULAS[p.template] ?? TUT_TEMPLATE_FORMULAS['问题导向']
   return {
     system: `你是教育内容策划，擅长设计面向「${p.level}」受众的${p.teachStyle}风格教程。
 
@@ -949,6 +1080,7 @@ export function buildTutorialPrompt(p: { level: string; teachStyle: string; plat
 - 知识点由浅入深，每个步骤都要可操作
 - 每5-8分钟设计一个小总结或练习
 - 结尾要有完整的知识回顾
+- 讲解模板「${p.template}」：章节编排必须贴合结构公式 ${formula.join(' → ')}
 
 严格按JSON返回：
 {
@@ -963,6 +1095,7 @@ export function buildTutorialPrompt(p: { level: string; teachStyle: string; plat
   "content": "完整教程脚本框架（含每节要点和过渡语）"
 }`,
     user: `【受众水平】${p.level}
+【讲解模板】${p.template}（${formula.join(' → ')}）
 【教学风格】${p.teachStyle}
 【发布平台】${p.platform}
 【时长】${p.duration}分钟
@@ -972,7 +1105,13 @@ export function buildTutorialPrompt(p: { level: string; teachStyle: string; plat
 
 // ─── Commentary ───────────────────────────────────────────────────────────────
 
-export function buildCommentaryPrompt(p: { commentaryType: string; style: string; duration: number; brief: string }): PromptPair {
+export const COM_TEMPLATE_FORMULAS: Record<string, string[]> = {
+  '悬念解构': ['悬念争议开场', '背景梳理', '逐层解析', '核心观点升华'],
+  '对比论证': ['现象引入', '正反案例对比', '深层原因剖析', '观点输出反思'],
+}
+
+export function buildCommentaryPrompt(p: { commentaryType: string; template: string; style: string; duration: number; brief: string }): PromptPair {
+  const formula = COM_TEMPLATE_FORMULAS[p.template] ?? COM_TEMPLATE_FORMULAS['悬念解构']
   return {
     system: `你是「${p.commentaryType}」类解说视频策划，擅长${p.style}风格的内容创作。
 
@@ -981,6 +1120,7 @@ export function buildCommentaryPrompt(p: { commentaryType: string; style: string
 - 信息密度要高，废话少（不要"话不多说，我们直接开始"这类废话）
 - 解说词有个人观点和立场，不要只是复述事实
 - 关键信息用金句强化，让观众记住
+- 论述模板「${p.template}」：段落编排必须贴合结构公式 ${formula.join(' → ')}
 
 严格按JSON返回：
 {
@@ -994,6 +1134,7 @@ export function buildCommentaryPrompt(p: { commentaryType: string; style: string
   "content": "整体策划思路 + 配图/配视频建议"
 }`,
     user: `【解说类型】${p.commentaryType}
+【论述模板】${p.template}（${formula.join(' → ')}）
 【风格】${p.style}
 【时长】${p.duration}分钟
 【解说对象/方向】${p.brief}`,
@@ -1008,6 +1149,105 @@ export const CONTENT_TYPE_LABELS: Record<ContentType, string> = {
   ad: '广告', promo: '宣传片',
   mv: 'MV', motionposter: '动态海报',
   documentary: '纪录片', tutorial: '教程', commentary: '解说',
+}
+
+// ─── Generic quality loop (every single-shot content type) ────────────────────
+// Short drama gets its own bible/outline/review/rewrite pipeline above because it's
+// episodic and needs batching. Every other type generates one piece in one shot, so
+// the same "review, then auto-revise if below threshold" idea works with a single
+// review call and a single rewrite call — no batching required.
+
+export const QUALITY_FOCUS: Partial<Record<ContentType, string>> = {
+  movie: '开场吸引力、三幕结构完整性、人物弧线可信度、主题表达深度、场景可执行性（预算/取景合理）',
+  microfilm: '情感共鸣强度、叙事留白与余韵、开场代入速度、结尾情绪落点、镜头语言可执行性',
+  shortvideo: '前3秒抓人程度、信息密度、平台适配性（竖屏/时长/节奏）、互动与转发驱动力、结尾行动引导',
+  vlog: '真实感与代入感、叙事节奏、记录价值（信息量或情绪价值）、可执行性',
+  livestream: '开场留人话术、互动设计、转化路径清晰度、节奏把控',
+  ad: '痛点命中精准度、产品卖点传达效率、情感或利益驱动力、行动号召清晰度',
+  promo: '主体价值传达完整度、情感基调匹配度、画面与叙事张力、传播友好度',
+  mv: '视觉概念与歌词/情绪契合度、镜头语言创意度、节奏卡点设计',
+  motionposter: '核心信息5秒传达效率、视觉冲击力、风格统一度',
+  documentary: '问题意识深度、叙事结构完整性、观点或证据说服力、留白与思考空间',
+  tutorial: '知识点拆解清晰度、学习曲线合理性、可执行性（跟练难度）、平台适配',
+  commentary: '观点独特性、论证逻辑性、信息密度、娱乐性与深度平衡',
+}
+
+export function buildGenericQualityReviewPrompt(p: {
+  contentType: ContentType
+  typeLabel: string
+  title: string
+  synopsis: string
+  content: string
+}): PromptPair {
+  const focus = QUALITY_FOCUS[p.contentType] ?? '整体创意质量、结构完整性、可执行性'
+  return {
+    system: `你是${p.typeLabel}领域的资深内容审核总监，对内容方案做上线前质检。
+
+评分维度全部为0-10分，totalScore为0-100分：
+- hook：开场吸引力
+- structure：结构/节奏完整性
+- resonance：情感或信息共鸣度
+- producibility：可执行/可生成程度
+- fit：与${p.typeLabel}类型的契合度
+
+评估要点（${p.typeLabel}）：${focus}
+
+要求：
+1. 判断必须具体，不要客套
+2. 风险要指出会影响完播/传播/落地的问题
+3. 重写建议要能直接指导下一轮改稿
+4. 以85分作为可上线标准；低于85分必须明确指出最拖分的问题和对应改法
+5. 严格打分，不要虚高
+
+严格按JSON返回，不要有任何其他内容：
+{
+  "totalScore": 0,
+  "verdict": "一句话审稿结论",
+  "scores": { "hook": 0, "structure": 0, "resonance": 0, "producibility": 0, "fit": 0 },
+  "strengths": ["优势1", "优势2"],
+  "risks": ["风险1", "风险2"],
+  "rewriteSuggestions": ["重写建议1", "重写建议2", "重写建议3"]
+}`,
+    user: `【标题】${p.title}
+【概要】${p.synopsis}
+【内容方案】${p.content}
+
+请完成专业质检。`,
+  }
+}
+
+export function buildGenericRewriteByQualityPrompt(p: {
+  contentType: ContentType
+  typeLabel: string
+  title: string
+  synopsis: string
+  content: string
+  qualityReport: DramaQualityReport
+}): PromptPair {
+  const focus = QUALITY_FOCUS[p.contentType] ?? '整体创意质量、结构完整性、可执行性'
+  return {
+    system: `你是${p.typeLabel}领域的资深内容编辑，负责根据质检报告对内容方案进行专业改稿。
+
+改稿原则：
+1. 保留核心创意方向，不要推翻整体设定
+2. 按质检报告重点修复被指出的问题
+3. 不允许只改措辞，必须实质提升：${focus}
+4. 优先把总分拉到85分以上
+
+严格按JSON返回，不要有任何其他内容：
+{
+  "title": "改稿后的标题",
+  "synopsis": "改稿后的概要",
+  "content": "改稿后的完整内容方案"
+}`,
+    user: `【标题】${p.title}
+【概要】${p.synopsis}
+【当前内容方案】${p.content}
+【质检报告】
+${JSON.stringify(p.qualityReport ?? {}, null, 2)}
+
+请按质检报告重写。`,
+  }
 }
 
 export const CONTENT_GROUPS = [

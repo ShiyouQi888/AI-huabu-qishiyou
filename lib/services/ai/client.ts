@@ -7,9 +7,10 @@
  * 不依赖 openai SDK，避免 Turbopack 下的 Node shim 问题。
  */
 
-import type { TextGenRequest, TextGenResponse, ImageGenRequest, VideoGenRequest, VideoGenResponse, TaskStatus } from './types'
+import type { TextGenRequest, TextGenResponse, ImageGenRequest, ImageGenResponse, VideoGenRequest, VideoGenResponse, TaskStatus, AudioGenRequest, AudioGenResponse, SongGenRequest, SongGenResponse } from './types'
 import { AIError } from './types'
 import { getConfig } from './config'
+import { getModelMaxTokens } from './models'
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
@@ -25,6 +26,13 @@ function isRetryable(err: unknown): boolean {
       || msg.includes('ETIMEDOUT') || msg.includes('UND_ERR_SOCKET')
   }
   return false
+}
+
+/** 请求预算不能超过模型上限，但调用方明确给出的较小预算也必须生效。 */
+function resolveMaxTokens(model: string, requested?: number) {
+  const modelLimit = getModelMaxTokens(model)
+  if (requested && modelLimit) return Math.min(requested, modelLimit)
+  return requested ?? modelLimit
 }
 
 /** 带认证 + 自动重试的 fetch 请求 */
@@ -52,7 +60,11 @@ async function apiFetch(
           ...extraHeaders,
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(300_000),
+        // Text generation now always requests the model's full maxTokens ceiling (see
+        // getModelMaxTokens) rather than a small guessed number, so a complex reasoning
+        // + generation pass can legitimately run long. 5 minutes was cutting those off
+        // mid-response with a raw timeout error.
+        signal: AbortSignal.timeout(900_000),
       })
 
       if (!resp.ok) {
@@ -81,21 +93,29 @@ async function apiFetch(
 
 /** 火山方舟 Ark · Seedance 视频生成 */
 interface ArkContentBlock {
-  type: 'text' | 'image_url'
+  type: 'text' | 'image_url' | 'video_url' | 'audio_url'
   text?: string
   image_url?: { url: string; role?: 'first_frame' | 'last_frame' | 'reference' }
+  video_url?: { url: string; role?: 'reference_video' | 'reference' }
+  audio_url?: { url: string; role?: 'reference_audio' | 'reference' }
 }
 
-async function toPublicImageUrl(imageUrl: string): Promise<string> {
-  if (imageUrl.startsWith('data:')) return imageUrl
-  if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) return imageUrl
+async function toPublicMediaUrl(mediaUrl: string): Promise<string> {
+  if (mediaUrl.startsWith('data:')) return mediaUrl
+  if (mediaUrl.startsWith('http://') || mediaUrl.startsWith('https://')) return mediaUrl
   // Local path (e.g. /uploads/materials/xxx.png) → base64 data URL
   const fs = await import('fs/promises')
   const path = await import('path')
-  const filePath = path.join(process.cwd(), 'public', imageUrl)
+  const filePath = path.join(process.cwd(), 'public', mediaUrl)
   const buf = await fs.readFile(filePath)
   const ext = path.extname(filePath).toLowerCase()
-  const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg'
+  const mime = ext === '.png' ? 'image/png'
+    : ext === '.webp' ? 'image/webp'
+    : ext === '.mp4' ? 'video/mp4'
+    : ext === '.mov' ? 'video/quicktime'
+    : ext === '.mp3' ? 'audio/mpeg'
+    : ext === '.wav' ? 'audio/wav'
+    : 'image/jpeg'
   return `data:${mime};base64,${buf.toString('base64')}`
 }
 
@@ -108,12 +128,22 @@ export async function videoGenSeedance(
     throw new AIError('火山引擎即梦 未配置 API Key', 401, 'volces')
   }
 
+  // Seedance 2.5 支持最多 50 个多模态参考素材；其他当前接入版本保持 15 个。
+  const referenceLimits = req.model.includes('seedance-2-5')
+    ? { image: 30, video: 10, audio: 10, total: 50 }
+    : { image: 9, video: 3, audio: 3, total: 15 }
+  const references = req.references?.filter((reference, index, all) => {
+    const type = reference.type || 'image'
+    const before = all.slice(0, index).filter((item) => (item.type || 'image') === type).length
+    return before < referenceLimits[type]
+  }).slice(0, referenceLimits.total)
+
   // 构造 content 数组（Ark 多模态 content 格式）
   const content: ArkContentBlock[] = []
 
   // 首帧图
   if (req.firstFrameImage) {
-    const url = await toPublicImageUrl(req.firstFrameImage)
+    const url = await toPublicMediaUrl(req.firstFrameImage)
     content.push({
       type: 'image_url',
       image_url: { url, role: 'first_frame' },
@@ -122,7 +152,7 @@ export async function videoGenSeedance(
 
   // 尾帧图
   if (req.lastFrameImage) {
-    const url = await toPublicImageUrl(req.lastFrameImage)
+    const url = await toPublicMediaUrl(req.lastFrameImage)
     content.push({
       type: 'image_url',
       image_url: { url, role: 'last_frame' },
@@ -130,9 +160,9 @@ export async function videoGenSeedance(
   }
 
   // 全能参考模式：解析 @label 引用，构建交错的 text + image 内容
-  if (req.references?.length && req.prompt.includes('@')) {
-    const refMap = new Map(req.references.map(r => [`@${r.label}`, r]))
-    const escaped = req.references.map(r =>
+  if (references?.length && req.prompt.includes('@')) {
+    const refMap = new Map(references.map(r => [`@${r.label}`, r]))
+    const escaped = references.map(r =>
       `@${r.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`
     )
     const regex = new RegExp(`(${escaped.join('|')})`)
@@ -141,8 +171,14 @@ export async function videoGenSeedance(
     for (const part of parts) {
       const ref = refMap.get(part)
       if (ref) {
-        const url = await toPublicImageUrl(ref.url)
-        content.push({ type: 'image_url', image_url: { url, role: 'reference' } })
+        const url = await toPublicMediaUrl(ref.url)
+        if (ref.type === 'video') {
+          content.push({ type: 'video_url', video_url: { url, role: 'reference_video' } })
+        } else if (ref.type === 'audio') {
+          content.push({ type: 'audio_url', audio_url: { url, role: 'reference_audio' } })
+        } else {
+          content.push({ type: 'image_url', image_url: { url, role: 'reference' } })
+        }
       } else if (part.trim()) {
         content.push({ type: 'text', text: part })
       }
@@ -305,10 +341,11 @@ export async function textGenStream(
       model: req.model,
       messages,
       temperature: req.temperature ?? 0.7,
-      max_tokens: req.maxTokens,
+      max_tokens: resolveMaxTokens(req.model, req.maxTokens),
       stream: true,
     }),
-    signal: AbortSignal.timeout(300_000),
+    // See apiFetch above — full maxTokens ceiling means generation can legitimately run long.
+    signal: AbortSignal.timeout(900_000),
   })
 
   if (!resp.ok) {
@@ -413,23 +450,56 @@ export async function textGen(
 
   messages.push({ role: 'user', content: userContent })
 
+  // Always request the model's actual ceiling rather than a guessed fixed number —
+  // reasoning models can burn a small budget entirely on thinking and never reach the
+  // answer (see the AbortError-adjacent truncation guard below). Requesting more costs
+  // nothing unless the model actually uses it. Falls back to whatever the caller asked
+  // for if the model isn't in the registry (e.g. a custom/unlisted deployment).
+  const maxTokens = resolveMaxTokens(req.model, req.maxTokens)
+
   const resp = await apiFetch(providerId, '/chat/completions', {
     model: req.model,
     messages,
     temperature: req.temperature ?? 0.7,
-    max_tokens: req.maxTokens,
+    max_tokens: maxTokens,
   })
 
   const data = await resp.json() as {
-    choices: { message: { content?: string; reasoning_content?: string } }[]
+    choices: { message: { content?: string; reasoning_content?: string }; finish_reason?: string }[]
     model: string
     usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
   }
 
   const choice = data.choices?.[0]
+
+  // Reasoning models (DeepSeek etc.) can burn the entire maxTokens budget on
+  // reasoning_content and get cut off before ever writing the real answer. That shows up
+  // as content="" + finish_reason="length" — silently falling back to reasoning_content
+  // here would hand the caller a chain-of-thought transcript disguised as the response,
+  // which then fails obscurely downstream (e.g. "no JSON found"). Fail loudly instead,
+  // with enough detail to fix it (raise maxTokens).
+  if (!choice?.message?.content && choice?.finish_reason === 'length') {
+    const reasoningLen = choice?.message?.reasoning_content?.length ?? 0
+    const providerName = getConfig(providerId)?.name ?? providerId
+    throw new AIError(
+      `${providerName} 在思考阶段耗尽了 maxTokens 限制（reasoning 已生成 ${reasoningLen} 字仍未开始正式回答），未生成有效内容。请提高 maxTokens 后重试。`,
+      502,
+      providerId,
+    )
+  }
+
   const text = choice?.message?.content
     || choice?.message?.reasoning_content
     || ''
+
+  if (!choice?.message?.content) {
+    console.warn(
+      `[${providerId}] chat/completions 未返回 content，回退 reasoning_content。`,
+      `model=${req.model} finish_reason=${choice?.finish_reason} maxTokens=${req.maxTokens}`,
+      `contentLen=0 reasoningLen=${choice?.message?.reasoning_content?.length ?? 0}`,
+      `completionTokens=${data.usage?.completion_tokens}`,
+    )
+  }
 
   return {
     text,
@@ -443,7 +513,7 @@ export async function textGen(
 }
 
 /** 图片生成 - DALL·E 兼容接口 */
-async function imageGenDalle(providerId: string, req: ImageGenRequest): Promise<{ imageUrl: string }> {
+async function imageGenDalle(providerId: string, req: ImageGenRequest): Promise<ImageGenResponse> {
   const resp = await apiFetch(providerId, '/images/generations', {
     model: req.model,
     prompt: req.prompt,
@@ -461,29 +531,53 @@ async function imageGenDalle(providerId: string, req: ImageGenRequest): Promise<
 }
 
 /** 火山引擎即梦图片生成 */
-async function imageGenVolces(providerId: string, req: ImageGenRequest): Promise<{ imageUrl: string }> {
-  const refImage = req.referenceImage ? await toPublicImageUrl(req.referenceImage) : undefined
-  const resp = await apiFetch(providerId, '/images/generations', {
+async function imageGenVolces(providerId: string, req: ImageGenRequest): Promise<ImageGenResponse> {
+  const refs = req.referenceImages?.length ? req.referenceImages : (req.referenceImage ? [req.referenceImage] : [])
+  const publicRefs = await Promise.all(refs.map(toPublicMediaUrl))
+  const isSeedream5 = req.model.includes('seedream-5-0')
+  const coordinatePrompt = req.annotations?.map((a, i) => {
+    const marker = a.type === 'point'
+      ? `<point>${a.x ?? 0} ${a.y ?? 0}</point>`
+      : `<bbox>${a.x1 ?? 0} ${a.y1 ?? 0} ${a.x2 ?? 999} ${a.y2 ?? 999}</bbox>`
+    return `标记${i + 1}：${marker}${a.prompt?.trim() ? `，编辑要求：${a.prompt.trim()}` : ''}`
+  }).join('\n')
+  const body: Record<string, unknown> = {
     model: req.model,
-    prompt: req.prompt,
+    prompt: coordinatePrompt ? `${req.prompt}\n\n${coordinatePrompt}` : req.prompt,
     negative_prompt: req.negativePrompt,
-    size: `${req.width ?? 1024}x${req.height ?? 1024}`,
-    n: req.count ?? 1,
-    reference_image: refImage,
-  })
-
-  const data = await resp.json() as { data: { url: string }[] }
-  const imageUrl = data.data?.[0]?.url
+    size: isSeedream5 ? (req.layerDecomposition ? 'auto' : '2K') : `${req.width ?? 1024}x${req.height ?? 1024}`,
+    response_format: 'url',
+    watermark: false,
+  }
+  if (isSeedream5) {
+    if (publicRefs.length) body.image = publicRefs.length === 1 ? publicRefs[0] : publicRefs
+    if (req.layerDecomposition) {
+      body.layer_decomposition = true
+      body.output_format = 'png'
+      body.background = 'transparent'
+    }
+  } else {
+    body.n = req.count ?? 1
+    if (publicRefs[0]) body.reference_image = publicRefs[0]
+  }
+  const resp = await apiFetch(providerId, '/images/generations', body)
+  const data = await resp.json() as { data: Array<{ url?: string; name?: string; description?: string; z_index?: number; bounding_box?: { absolute?: number[]; normalized?: number[] } }> }
+  const items = data.data?.filter((item) => item.url) ?? []
+  const imageUrl = items[0]?.url
   if (!imageUrl) throw new AIError('即梦返回空结果', 500, 'volces')
 
-  return { imageUrl }
+  return {
+    imageUrl,
+    imageUrls: items.map((item) => item.url as string),
+    layers: req.layerDecomposition ? items.slice(1).map((item) => ({ url: item.url as string, name: item.name, description: item.description, zIndex: item.z_index, boundingBox: item.bounding_box })) : undefined,
+  }
 }
 
 /** 图片生成入口 */
 export async function imageGen(
   providerId: string,
   req: ImageGenRequest,
-): Promise<{ imageUrl: string }> {
+): Promise<ImageGenResponse> {
   if (providerId === 'volces') {
     return imageGenVolces(providerId, req)
   }
@@ -685,5 +779,164 @@ export async function audioTaskCosyVoice(taskId: string): Promise<import('./type
     status: mappedStatus,
     audioUrl: data.output?.results?.[0]?.url,
     duration: 0,
+  }
+}
+
+/** 火山引擎 Seed Speech v3 文生语音。HTTP 接口返回 base64 音频分片。 */
+export async function audioGenVolces(req: AudioGenRequest): Promise<AudioGenResponse> {
+  const apiKey = process.env.VOLCENGINE_TTS_API_KEY || process.env.ARK_API_KEY
+  if (!apiKey) throw new AIError('火山引擎语音未配置 API Key', 401, 'volces')
+
+  const resourceId = req.referenceAudio
+    ? (process.env.VOLCENGINE_TTS_CLONE_RESOURCE_ID || 'seed-icl-2.0')
+    : (process.env.VOLCENGINE_TTS_RESOURCE_ID || 'seed-tts-2.0')
+  const response = await fetch(
+    process.env.VOLCENGINE_TTS_BASE_URL || 'https://openspeech.bytedance.com/api/v3/tts/unidirectional',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Api-Key': apiKey,
+        'X-Api-Resource-Id': resourceId,
+        'X-Api-Request-Id': crypto.randomUUID(),
+      },
+      body: JSON.stringify({
+        user: { uid: 'ai-canvas' },
+        req_params: {
+          text: req.text,
+          speaker: req.voice || 'zh_female_vv_uranus_bigtts',
+          audio_params: {
+            format: 'mp3',
+            sample_rate: 24000,
+            ...(req.speed != null ? { speech_rate: Math.round((req.speed - 1) * 100) } : {}),
+          },
+        },
+      }),
+      signal: AbortSignal.timeout(300_000),
+    },
+  )
+
+  if (!response.ok) {
+    const message = await response.text().catch(() => '')
+    throw new AIError(`火山引擎语音 API 错误 [${response.status}]: ${message.slice(0, 300)}`, response.status, 'volces')
+  }
+
+  const raw = await response.text()
+  const chunks: string[] = []
+  let apiError = ''
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue
+    try {
+      const frame = JSON.parse(line) as { code?: number; message?: string; data?: string }
+      if (frame.code === 0 && frame.data) chunks.push(frame.data)
+      if (frame.code && frame.code !== 0 && frame.code !== 20000000) apiError = frame.message || `code ${frame.code}`
+    } catch { /* ignore keep-alive lines */ }
+  }
+  if (apiError) throw new AIError(`火山引擎语音生成失败: ${apiError}`, 502, 'volces')
+  if (chunks.length === 0) throw new AIError('火山引擎语音未返回音频数据', 502, 'volces')
+
+  return {
+    taskId: crypto.randomUUID(),
+    status: 'completed',
+    audioUrl: `data:audio/mpeg;base64,${chunks.join('')}`,
+    provider: 'volces',
+  }
+}
+
+function toSunoApiModel(model: string): 'V6' | 'V6_WILD' | 'V6_MINI' {
+  if (model === 'suno-v6-wild') return 'V6_WILD'
+  if (model === 'suno-v6-mini') return 'V6_MINI'
+  return 'V6'
+}
+
+interface SunoData {
+  taskId?: string
+  status?: string
+  errorMessage?: string | null
+  response?: {
+    taskId?: string
+    sunoData?: Array<{
+      audio_url?: string
+      stream_audio_url?: string
+      image_url?: string
+      title?: string
+      prompt?: string
+      duration?: number
+    }>
+  }
+}
+
+/** Suno API（docs.sunoapi.org）歌曲生成。 */
+export async function songGenSuno(req: SongGenRequest): Promise<SongGenResponse> {
+  const config = getConfig('suno')
+  if (!config?.apiKey) throw new AIError('Suno 未配置 API Key', 401, 'suno')
+  const response = await fetch(`${config.baseUrl.replace(/\/+$/, '')}/api/v1/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey}` },
+    body: JSON.stringify({
+      customMode: Boolean(req.lyrics || req.title || req.style),
+      instrumental: Boolean(req.instrumental),
+      model: toSunoApiModel(req.model),
+      ...(req.prompt ? { prompt: req.prompt } : {}),
+      ...(req.lyrics ? { lyrics: req.lyrics } : {}),
+      ...(req.title ? { title: req.title } : {}),
+      ...(req.style ? { style: req.style } : {}),
+    }),
+    signal: AbortSignal.timeout(300_000),
+  })
+  if (!response.ok) {
+    const message = await response.text().catch(() => '')
+    throw new AIError(`Suno API 错误 [${response.status}]: ${message.slice(0, 300)}`, response.status, 'suno')
+  }
+  const payload = await response.json() as { code?: number; msg?: string; data?: { taskId?: string } }
+  if (payload.code !== 200 || !payload.data?.taskId) {
+    throw new AIError(`Suno 任务创建失败: ${payload.msg || '未返回 taskId'}`, 502, 'suno')
+  }
+  return {
+    taskId: payload.data.taskId,
+    songId: payload.data.taskId,
+    status: 'pending',
+    provider: 'suno',
+    title: req.title,
+  }
+}
+
+export async function songTaskSuno(taskId: string, model = 'suno-v6'): Promise<SongGenResponse> {
+  const config = getConfig('suno')
+  if (!config?.apiKey) throw new AIError('Suno 未配置 API Key', 401, 'suno')
+  const url = new URL(`${config.baseUrl.replace(/\/+$/, '')}/api/v1/generate/record-info`)
+  url.searchParams.set('taskId', taskId)
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${config.apiKey}` },
+    signal: AbortSignal.timeout(30_000),
+  })
+  if (!response.ok) {
+    const message = await response.text().catch(() => '')
+    throw new AIError(`Suno 查询错误 [${response.status}]: ${message.slice(0, 300)}`, response.status, 'suno')
+  }
+  const payload = await response.json() as { code?: number; msg?: string; data?: SunoData }
+  const data = payload.data
+  if (payload.code !== 200 || !data) {
+    throw new AIError(`Suno 查询失败: ${payload.msg || '返回数据为空'}`, 502, 'suno')
+  }
+  const song = data.response?.sunoData?.[0]
+  const apiStatus = String(data.status || 'PENDING').toUpperCase()
+  const status: TaskStatus =
+    apiStatus === 'SUCCESS' ? 'completed' :
+    ['CREATE_TASK_FAILED', 'GENERATE_AUDIO_FAILED', 'CALLBACK_EXCEPTION', 'SENSITIVE_WORD_ERROR'].includes(apiStatus)
+      ? 'failed' :
+    apiStatus === 'FIRST_SUCCESS' ? 'running' :
+    'pending'
+  return {
+    taskId,
+    songId: taskId,
+    status,
+    audioUrl: song?.audio_url || song?.stream_audio_url,
+    coverUrl: song?.image_url,
+    title: song?.title,
+    lyrics: song?.prompt,
+    duration: song?.duration,
+    provider: 'suno',
   }
 }

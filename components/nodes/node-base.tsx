@@ -60,6 +60,9 @@ interface NodeBaseProps {
   width?: string
   widthPx?: number
   noPadding?: boolean
+  /** 编辑画布等交互态下禁止 React Flow 拖动节点 */
+  stopNodeDrag?: boolean
+  onNodePointerDown?: React.PointerEventHandler<HTMLDivElement>
 }
 
 export const NodeBase = forwardRef<HTMLDivElement, NodeBaseProps>(function NodeBase({
@@ -80,6 +83,8 @@ export const NodeBase = forwardRef<HTMLDivElement, NodeBaseProps>(function NodeB
   width = 'w-[320px]',
   widthPx,
   noPadding = false,
+  stopNodeDrag = false,
+  onNodePointerDown,
 }: NodeBaseProps, ref) {
   const updateNodeData = useFlowStore((s) => s.updateNodeData)
   const [editing, setEditing] = useState(false)
@@ -113,7 +118,7 @@ export const NodeBase = forwardRef<HTMLDivElement, NodeBaseProps>(function NodeB
   }
 
   return (
-    <div ref={ref} className={`relative ${widthPx ? '' : width}`} style={widthPx ? { width: widthPx } : undefined}>
+    <div ref={ref} data-node-id={nodeId} onPointerDown={(e) => { if (stopNodeDrag) e.stopPropagation(); onNodePointerDown?.(e) }} className={`relative ${widthPx ? '' : width}`} style={widthPx ? { width: widthPx } : undefined}>
       <div
         className={`
           relative rounded-2xl border bg-card h-full overflow-hidden

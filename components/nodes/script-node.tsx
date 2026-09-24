@@ -2,29 +2,35 @@
 
 import { memo, useState, useEffect, useRef, useCallback } from 'react'
 import { NodeProps, Node } from '@xyflow/react'
-import { FileCode2, Sparkles, Loader2, Check, RotateCcw } from 'lucide-react'
+import { FileCode2, Sparkles, Loader2, Check, RotateCcw, AlertTriangle, ArrowRight } from 'lucide-react'
 import { CustomNodeData, useFlowStore } from '@/lib/store'
 import { ModelSelector } from '@/components/model-selector'
 import { NodeBase } from './node-base'
 import { useModels } from '@/hooks/use-models'
 import { cn } from '@/lib/utils'
 import { CopyButton } from '@/components/copy-button'
+import { buildContinuitySummary, checkDramaConsistency, ConsistencyWarning } from '@/lib/drama-world-state'
 import {
   ContentType, CONTENT_GROUPS, CONTENT_TYPE_LABELS,
   DRAMA_BATCH_SIZE, buildShortDramaBiblePrompt, buildShortDramaPrompt, buildDramaEpisodesBatchPrompt,
-  buildDramaQualityReviewPrompt, DramaQualityReport, ShortDramaStoryBible, getDramaTemplateFormula,
-  buildMoviePrompt, buildMicrofilmPrompt,
-  buildShortVideoPrompt, buildVlogPrompt, buildLivestreamPrompt,
-  buildAdPrompt, buildPromoPrompt, buildMVPrompt, buildMotionPosterPrompt,
-  buildDocumentaryPrompt, buildTutorialPrompt, buildCommentaryPrompt,
+  buildDramaQualityReviewPrompt, buildDramaRewriteByQualityPrompt, DramaQualityReport, ShortDramaStoryBible, getDramaTemplateFormula,
+  buildGenericQualityReviewPrompt, buildGenericRewriteByQualityPrompt,
+  buildMoviePrompt, MOVIE_TEMPLATE_FORMULAS, buildMicrofilmPrompt, MICROFILM_TEMPLATE_FORMULAS,
+  buildShortVideoPrompt, SV_TEMPLATE_FORMULAS, buildVlogPrompt, VLOG_TEMPLATE_FORMULAS, buildLivestreamPrompt, STREAM_TEMPLATE_FORMULAS,
+  buildAdPrompt, AD_TEMPLATE_FORMULAS, buildPromoPrompt, PROMO_TEMPLATE_FORMULAS, buildMVPrompt, MV_TEMPLATE_FORMULAS,
+  buildMotionPosterPrompt, POSTER_TEMPLATE_FORMULAS,
+  buildDocumentaryPrompt, DOC_STRUCTURE_FORMULAS, buildTutorialPrompt, TUT_TEMPLATE_FORMULAS, buildCommentaryPrompt, COM_TEMPLATE_FORMULAS,
 } from './script-node-prompts'
 
 // ─── Option arrays ────────────────────────────────────────────────────────────
 
-const DRAMA_TEMPLATES = ['打脸逆袭', '先婚后爱', '重生复仇', '霸总甜宠', '赘婿崛起', '穿越古代', '替嫁真千金', '闪婚契约']
+const DRAMA_TEMPLATES = [
+  '打脸逆袭', '先婚后爱', '重生复仇', '霸总甜宠', '赘婿崛起', '穿越古代', '替嫁真千金', '闪婚契约',
+  '双面娇妻', '马甲大佬', '龙王赘婿', '校园重生', '恶女翻身', '亿万甜妻', '战神归来', '隐婚试爱',
+]
 const DRAMA_EP_COUNTS = [20, 40, 60, 80, 100]
 const DRAMA_EP_DURATIONS = [{ v: 60, label: '60s' }, { v: 90, label: '90s' }, { v: 120, label: '2min' }, { v: 180, label: '3min' }]
-const DRAMA_SATISFACTION = ['打脸反杀', '逆袭财富', '甜宠爱情', '能力碾压', '复仇成功']
+const DRAMA_SATISFACTION = ['打脸反杀', '逆袭财富', '甜宠爱情', '能力碾压', '复仇成功', '身份反转', '双向奔赴', '真相大白']
 
 const MOVIE_GENRES = ['剧情', '悬疑/惊悚', '爱情', '科幻', '动作', '恐怖', '喜剧', '历史/古装', '奇幻', '犯罪']
 const MOVIE_DURATIONS = [90, 100, 120, 150]
@@ -109,9 +115,9 @@ function PillGroup<T extends string | number>({ options, value, onChange, labelF
   )
 }
 
-function ParamRow({ label, children }: { label: string; children: React.ReactNode }) {
+function ParamRow({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
   return (
-    <div>
+    <div className={className}>
       <div className="mb-1 text-[10px] font-medium text-muted-foreground/55">{label}</div>
       {children}
     </div>
@@ -122,7 +128,7 @@ function TextInput({ value, onChange, placeholder }: { value: string; onChange: 
   return (
     <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
       onPointerDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}
-      className="nodrag nopan w-full rounded-md border border-border/40 bg-background/60 px-2 py-1 text-[11px] text-foreground placeholder:text-muted-foreground/40 outline-none focus:border-primary/40"
+      className="nodrag nopan w-[200px] rounded-md border border-border/40 bg-background/60 px-2 py-1 text-[11px] text-foreground placeholder:text-muted-foreground/40 outline-none focus:border-primary/40"
     />
   )
 }
@@ -135,20 +141,20 @@ function ShortDramaParams({ state, setState }: {
 }) {
   return (
     <div className="space-y-2.5">
-      <ParamRow label="剧情模板">
-        <PillGroup options={DRAMA_TEMPLATES} value={state.template} onChange={(v) => setState({ template: v })} />
-      </ParamRow>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="flex flex-wrap gap-x-5 gap-y-2.5">
+        <ParamRow label="剧情模板">
+          <PillGroup options={DRAMA_TEMPLATES} value={state.template} onChange={(v) => setState({ template: v })} />
+        </ParamRow>
         <ParamRow label="集数">
           <PillGroup options={DRAMA_EP_COUNTS} value={state.epCount} onChange={(v) => setState({ epCount: v })} labelFn={(v) => `${v}集`} />
         </ParamRow>
         <ParamRow label="每集时长">
           <PillGroup options={DRAMA_EP_DURATIONS.map(d => d.v)} value={state.epDur} onChange={(v) => setState({ epDur: v })} labelFn={(v) => DRAMA_EP_DURATIONS.find(d => d.v === v)?.label ?? String(v)} />
         </ParamRow>
+        <ParamRow label="爽点类型">
+          <PillGroup options={DRAMA_SATISFACTION} value={state.satisfactionType} onChange={(v) => setState({ satisfactionType: v })} />
+        </ParamRow>
       </div>
-      <ParamRow label="爽点类型">
-        <PillGroup options={DRAMA_SATISFACTION} value={state.satisfactionType} onChange={(v) => setState({ satisfactionType: v })} />
-      </ParamRow>
       <div className="rounded-lg border border-amber-500/15 bg-amber-500/5 px-2.5 py-2">
         <div className="mb-1 text-[10px] font-medium text-amber-500/80">模板结构公式</div>
         <div className="text-[11px] leading-relaxed text-muted-foreground">
@@ -159,152 +165,165 @@ function ShortDramaParams({ state, setState }: {
   )
 }
 
+/** Compact "current template's structure" hint — same idea as drama's formula box, lighter weight. */
+function FormulaHint({ formulas, template }: { formulas: Record<string, string[]>; template: string }) {
+  const beats = formulas[template]
+  if (!beats) return null
+  return (
+    <div className="w-full rounded-lg border border-amber-500/15 bg-amber-500/5 px-2.5 py-1.5 text-[10px] leading-relaxed text-muted-foreground">
+      <span className="font-medium text-amber-500/80">结构：</span>{beats.join(' → ')}
+    </div>
+  )
+}
+
 function MovieParams({ state, setState }: {
-  state: { genre: string; arcStart: string; arcEnd: string; conflict: string; theme: string; ending: string; duration: number }
+  state: { genre: string; template: string; arcStart: string; arcEnd: string; conflict: string; theme: string; ending: string; duration: number }
   setState: (patch: Partial<typeof state>) => void
 }) {
   return (
-    <div className="space-y-2.5">
+    <div className="flex flex-wrap gap-x-5 gap-y-2.5">
       <ParamRow label="类型/风格">
         <PillGroup options={MOVIE_GENRES} value={state.genre} onChange={(v) => setState({ genre: v })} />
       </ParamRow>
-      <div className="grid grid-cols-2 gap-2">
-        <ParamRow label="主角起点">
-          <TextInput value={state.arcStart} onChange={(v) => setState({ arcStart: v })} placeholder="e.g. 失意落魄的画家" />
-        </ParamRow>
-        <ParamRow label="主角终点">
-          <TextInput value={state.arcEnd} onChange={(v) => setState({ arcEnd: v })} placeholder="e.g. 重获自我的艺术家" />
-        </ParamRow>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <ParamRow label="时长">
-          <PillGroup options={MOVIE_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}分`} />
-        </ParamRow>
-        <ParamRow label="结局倾向">
-          <PillGroup options={['悲', '喜', '开放'] as string[]} value={state.ending} onChange={(v) => setState({ ending: v })} />
-        </ParamRow>
-      </div>
+      <ParamRow label="叙事模板">
+        <PillGroup options={Object.keys(MOVIE_TEMPLATE_FORMULAS)} value={state.template} onChange={(v) => setState({ template: v })} />
+      </ParamRow>
+      <ParamRow label="主角起点">
+        <TextInput value={state.arcStart} onChange={(v) => setState({ arcStart: v })} placeholder="e.g. 失意落魄的画家" />
+      </ParamRow>
+      <ParamRow label="主角终点">
+        <TextInput value={state.arcEnd} onChange={(v) => setState({ arcEnd: v })} placeholder="e.g. 重获自我的艺术家" />
+      </ParamRow>
+      <ParamRow label="时长">
+        <PillGroup options={MOVIE_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}分`} />
+      </ParamRow>
+      <ParamRow label="结局倾向">
+        <PillGroup options={['悲', '喜', '开放'] as string[]} value={state.ending} onChange={(v) => setState({ ending: v })} />
+      </ParamRow>
+      <FormulaHint formulas={MOVIE_TEMPLATE_FORMULAS} template={state.template} />
     </div>
   )
 }
 
 function MicrofilmParams({ state, setState }: {
-  state: { emotion: string; pov: string; endingMood: string; duration: number }
+  state: { emotion: string; template: string; pov: string; endingMood: string; duration: number }
   setState: (patch: Partial<typeof state>) => void
 }) {
   return (
-    <div className="space-y-2.5">
+    <div className="flex flex-wrap gap-x-5 gap-y-2.5">
       <ParamRow label="核心情感"><PillGroup options={MICROFILM_EMOTIONS} value={state.emotion} onChange={(v) => setState({ emotion: v })} /></ParamRow>
+      <ParamRow label="叙事模板"><PillGroup options={Object.keys(MICROFILM_TEMPLATE_FORMULAS)} value={state.template} onChange={(v) => setState({ template: v })} /></ParamRow>
       <ParamRow label="叙事视角"><PillGroup options={MICROFILM_POVS} value={state.pov} onChange={(v) => setState({ pov: v })} /></ParamRow>
-      <div className="grid grid-cols-2 gap-2">
-        <ParamRow label="结局情绪"><PillGroup options={MICROFILM_ENDINGS} value={state.endingMood} onChange={(v) => setState({ endingMood: v })} /></ParamRow>
-        <ParamRow label="时长"><PillGroup options={MICROFILM_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}分`} /></ParamRow>
-      </div>
+      <ParamRow label="结局情绪"><PillGroup options={MICROFILM_ENDINGS} value={state.endingMood} onChange={(v) => setState({ endingMood: v })} /></ParamRow>
+      <ParamRow label="时长"><PillGroup options={MICROFILM_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}分`} /></ParamRow>
+      <FormulaHint formulas={MICROFILM_TEMPLATE_FORMULAS} template={state.template} />
     </div>
   )
 }
 
 function ShortVideoParams({ state, setState }: {
-  state: { platform: string; hookType: string; duration: number; purpose: string }
+  state: { platform: string; template: string; hookType: string; duration: number; purpose: string }
   setState: (patch: Partial<typeof state>) => void
 }) {
   return (
-    <div className="space-y-2.5">
+    <div className="flex flex-wrap gap-x-5 gap-y-2.5">
       <ParamRow label="目标平台"><PillGroup options={SV_PLATFORMS} value={state.platform} onChange={(v) => setState({ platform: v })} /></ParamRow>
+      <ParamRow label="内容模板"><PillGroup options={Object.keys(SV_TEMPLATE_FORMULAS)} value={state.template} onChange={(v) => setState({ template: v })} /></ParamRow>
       <ParamRow label="钩子类型"><PillGroup options={SV_HOOKS} value={state.hookType} onChange={(v) => setState({ hookType: v })} /></ParamRow>
-      <div className="grid grid-cols-2 gap-2">
-        <ParamRow label="时长"><PillGroup options={SV_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}s`} /></ParamRow>
-        <ParamRow label="内容目的"><PillGroup options={SV_PURPOSES} value={state.purpose} onChange={(v) => setState({ purpose: v })} /></ParamRow>
-      </div>
+      <ParamRow label="时长"><PillGroup options={SV_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}s`} /></ParamRow>
+      <ParamRow label="内容目的"><PillGroup options={SV_PURPOSES} value={state.purpose} onChange={(v) => setState({ purpose: v })} /></ParamRow>
+      <FormulaHint formulas={SV_TEMPLATE_FORMULAS} template={state.template} />
     </div>
   )
 }
 
 function VlogParams({ state, setState }: {
-  state: { vlogType: string; platform: string; duration: number }
+  state: { vlogType: string; template: string; platform: string; duration: number }
   setState: (patch: Partial<typeof state>) => void
 }) {
   return (
-    <div className="space-y-2.5">
+    <div className="flex flex-wrap gap-x-5 gap-y-2.5">
       <ParamRow label="Vlog类型"><PillGroup options={VLOG_TYPES} value={state.vlogType} onChange={(v) => setState({ vlogType: v })} /></ParamRow>
-      <div className="grid grid-cols-2 gap-2">
-        <ParamRow label="目标平台"><PillGroup options={VLOG_PLATFORMS} value={state.platform} onChange={(v) => setState({ platform: v })} /></ParamRow>
-        <ParamRow label="时长"><PillGroup options={VLOG_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}分`} /></ParamRow>
-      </div>
+      <ParamRow label="叙事模板"><PillGroup options={Object.keys(VLOG_TEMPLATE_FORMULAS)} value={state.template} onChange={(v) => setState({ template: v })} /></ParamRow>
+      <ParamRow label="目标平台"><PillGroup options={VLOG_PLATFORMS} value={state.platform} onChange={(v) => setState({ platform: v })} /></ParamRow>
+      <ParamRow label="时长"><PillGroup options={VLOG_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}分`} /></ParamRow>
+      <FormulaHint formulas={VLOG_TEMPLATE_FORMULAS} template={state.template} />
     </div>
   )
 }
 
 function LivestreamParams({ state, setState }: {
-  state: { streamType: string; purpose: string; duration: number }
+  state: { streamType: string; template: string; purpose: string; duration: number }
   setState: (patch: Partial<typeof state>) => void
 }) {
   return (
-    <div className="space-y-2.5">
+    <div className="flex flex-wrap gap-x-5 gap-y-2.5">
       <ParamRow label="直播类型"><PillGroup options={STREAM_TYPES} value={state.streamType} onChange={(v) => setState({ streamType: v })} /></ParamRow>
-      <div className="grid grid-cols-2 gap-2">
-        <ParamRow label="核心目的"><PillGroup options={STREAM_PURPOSES} value={state.purpose} onChange={(v) => setState({ purpose: v })} /></ParamRow>
-        <ParamRow label="时长"><PillGroup options={STREAM_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}小时`} /></ParamRow>
-      </div>
+      <ParamRow label="流程模板"><PillGroup options={Object.keys(STREAM_TEMPLATE_FORMULAS)} value={state.template} onChange={(v) => setState({ template: v })} /></ParamRow>
+      <ParamRow label="核心目的"><PillGroup options={STREAM_PURPOSES} value={state.purpose} onChange={(v) => setState({ purpose: v })} /></ParamRow>
+      <ParamRow label="时长"><PillGroup options={STREAM_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}小时`} /></ParamRow>
+      <FormulaHint formulas={STREAM_TEMPLATE_FORMULAS} template={state.template} />
     </div>
   )
 }
 
 function AdParams({ state, setState }: {
-  state: { appealType: string; audience: string; duration: number }
+  state: { appealType: string; template: string; audience: string; duration: number }
   setState: (patch: Partial<typeof state>) => void
 }) {
   return (
-    <div className="space-y-2.5">
+    <div className="flex flex-wrap gap-x-5 gap-y-2.5">
       <ParamRow label="诉求方式"><PillGroup options={AD_APPEALS} value={state.appealType} onChange={(v) => setState({ appealType: v })} /></ParamRow>
-      <div className="grid grid-cols-2 gap-2">
-        <ParamRow label="目标受众">
-          <TextInput value={state.audience} onChange={(v) => setState({ audience: v })} placeholder="e.g. 25-35岁都市女性" />
-        </ParamRow>
-        <ParamRow label="时长"><PillGroup options={AD_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}s`} /></ParamRow>
-      </div>
+      <ParamRow label="创意模板"><PillGroup options={Object.keys(AD_TEMPLATE_FORMULAS)} value={state.template} onChange={(v) => setState({ template: v })} /></ParamRow>
+      <ParamRow label="目标受众">
+        <TextInput value={state.audience} onChange={(v) => setState({ audience: v })} placeholder="e.g. 25-35岁都市女性" />
+      </ParamRow>
+      <ParamRow label="时长"><PillGroup options={AD_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}s`} /></ParamRow>
+      <FormulaHint formulas={AD_TEMPLATE_FORMULAS} template={state.template} />
     </div>
   )
 }
 
 function PromoParams({ state, setState }: {
-  state: { subjectType: string; style: string; duration: number }
+  state: { subjectType: string; template: string; style: string; duration: number }
   setState: (patch: Partial<typeof state>) => void
 }) {
   return (
-    <div className="space-y-2.5">
+    <div className="flex flex-wrap gap-x-5 gap-y-2.5">
       <ParamRow label="宣传主体"><PillGroup options={PROMO_SUBJECTS} value={state.subjectType} onChange={(v) => setState({ subjectType: v })} /></ParamRow>
-      <div className="grid grid-cols-2 gap-2">
-        <ParamRow label="风格"><PillGroup options={PROMO_STYLES} value={state.style} onChange={(v) => setState({ style: v })} /></ParamRow>
-        <ParamRow label="时长"><PillGroup options={PROMO_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}分`} /></ParamRow>
-      </div>
+      <ParamRow label="结构模板"><PillGroup options={Object.keys(PROMO_TEMPLATE_FORMULAS)} value={state.template} onChange={(v) => setState({ template: v })} /></ParamRow>
+      <ParamRow label="风格"><PillGroup options={PROMO_STYLES} value={state.style} onChange={(v) => setState({ style: v })} /></ParamRow>
+      <ParamRow label="时长"><PillGroup options={PROMO_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}分`} /></ParamRow>
+      <FormulaHint formulas={PROMO_TEMPLATE_FORMULAS} template={state.template} />
     </div>
   )
 }
 
 function MVParams({ state, setState }: {
-  state: { mvType: string; aesthetic: string }
+  state: { mvType: string; template: string; aesthetic: string }
   setState: (patch: Partial<typeof state>) => void
 }) {
   return (
-    <div className="space-y-2.5">
+    <div className="flex flex-wrap gap-x-5 gap-y-2.5">
       <ParamRow label="MV类型"><PillGroup options={MV_TYPES} value={state.mvType} onChange={(v) => setState({ mvType: v })} /></ParamRow>
+      <ParamRow label="结构模板"><PillGroup options={Object.keys(MV_TEMPLATE_FORMULAS)} value={state.template} onChange={(v) => setState({ template: v })} /></ParamRow>
       <ParamRow label="美学风格"><PillGroup options={MV_AESTHETICS} value={state.aesthetic} onChange={(v) => setState({ aesthetic: v })} /></ParamRow>
+      <FormulaHint formulas={MV_TEMPLATE_FORMULAS} template={state.template} />
     </div>
   )
 }
 
 function MotionPosterParams({ state, setState }: {
-  state: { posterType: string; visualStyle: string; duration: number }
+  state: { posterType: string; template: string; visualStyle: string; duration: number }
   setState: (patch: Partial<typeof state>) => void
 }) {
   return (
-    <div className="space-y-2.5">
+    <div className="flex flex-wrap gap-x-5 gap-y-2.5">
       <ParamRow label="海报类型"><PillGroup options={POSTER_TYPES} value={state.posterType} onChange={(v) => setState({ posterType: v })} /></ParamRow>
-      <div className="grid grid-cols-2 gap-2">
-        <ParamRow label="视觉风格"><PillGroup options={POSTER_STYLES} value={state.visualStyle} onChange={(v) => setState({ visualStyle: v })} /></ParamRow>
-        <ParamRow label="时长"><PillGroup options={POSTER_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}s`} /></ParamRow>
-      </div>
+      <ParamRow label="节奏模板"><PillGroup options={Object.keys(POSTER_TEMPLATE_FORMULAS)} value={state.template} onChange={(v) => setState({ template: v })} /></ParamRow>
+      <ParamRow label="视觉风格"><PillGroup options={POSTER_STYLES} value={state.visualStyle} onChange={(v) => setState({ visualStyle: v })} /></ParamRow>
+      <ParamRow label="时长"><PillGroup options={POSTER_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}s`} /></ParamRow>
+      <FormulaHint formulas={POSTER_TEMPLATE_FORMULAS} template={state.template} />
     </div>
   )
 }
@@ -314,45 +333,42 @@ function DocumentaryParams({ state, setState }: {
   setState: (patch: Partial<typeof state>) => void
 }) {
   return (
-    <div className="space-y-2.5">
+    <div className="flex flex-wrap gap-x-5 gap-y-2.5">
       <ParamRow label="纪录片类型"><PillGroup options={DOC_TYPES} value={state.docType} onChange={(v) => setState({ docType: v })} /></ParamRow>
-      <div className="grid grid-cols-2 gap-2">
-        <ParamRow label="叙事结构"><PillGroup options={DOC_STRUCTURES} value={state.structure} onChange={(v) => setState({ structure: v })} /></ParamRow>
-        <ParamRow label="时长"><PillGroup options={DOC_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}分`} /></ParamRow>
-      </div>
+      <ParamRow label="叙事结构"><PillGroup options={DOC_STRUCTURES} value={state.structure} onChange={(v) => setState({ structure: v })} /></ParamRow>
+      <ParamRow label="时长"><PillGroup options={DOC_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}分`} /></ParamRow>
+      <FormulaHint formulas={DOC_STRUCTURE_FORMULAS} template={state.structure} />
     </div>
   )
 }
 
 function TutorialParams({ state, setState }: {
-  state: { level: string; teachStyle: string; platform: string; duration: number }
+  state: { level: string; template: string; teachStyle: string; platform: string; duration: number }
   setState: (patch: Partial<typeof state>) => void
 }) {
   return (
-    <div className="space-y-2.5">
-      <div className="grid grid-cols-2 gap-2">
-        <ParamRow label="受众水平"><PillGroup options={TUT_LEVELS} value={state.level} onChange={(v) => setState({ level: v })} /></ParamRow>
-        <ParamRow label="教学风格"><PillGroup options={TUT_STYLES} value={state.teachStyle} onChange={(v) => setState({ teachStyle: v })} /></ParamRow>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <ParamRow label="发布平台"><PillGroup options={TUT_PLATFORMS} value={state.platform} onChange={(v) => setState({ platform: v })} /></ParamRow>
-        <ParamRow label="时长"><PillGroup options={TUT_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}分`} /></ParamRow>
-      </div>
+    <div className="flex flex-wrap gap-x-5 gap-y-2.5">
+      <ParamRow label="受众水平"><PillGroup options={TUT_LEVELS} value={state.level} onChange={(v) => setState({ level: v })} /></ParamRow>
+      <ParamRow label="讲解模板"><PillGroup options={Object.keys(TUT_TEMPLATE_FORMULAS)} value={state.template} onChange={(v) => setState({ template: v })} /></ParamRow>
+      <ParamRow label="教学风格"><PillGroup options={TUT_STYLES} value={state.teachStyle} onChange={(v) => setState({ teachStyle: v })} /></ParamRow>
+      <ParamRow label="发布平台"><PillGroup options={TUT_PLATFORMS} value={state.platform} onChange={(v) => setState({ platform: v })} /></ParamRow>
+      <ParamRow label="时长"><PillGroup options={TUT_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}分`} /></ParamRow>
+      <FormulaHint formulas={TUT_TEMPLATE_FORMULAS} template={state.template} />
     </div>
   )
 }
 
 function CommentaryParams({ state, setState }: {
-  state: { commentaryType: string; style: string; duration: number }
+  state: { commentaryType: string; template: string; style: string; duration: number }
   setState: (patch: Partial<typeof state>) => void
 }) {
   return (
-    <div className="space-y-2.5">
+    <div className="flex flex-wrap gap-x-5 gap-y-2.5">
       <ParamRow label="解说类型"><PillGroup options={COM_TYPES} value={state.commentaryType} onChange={(v) => setState({ commentaryType: v })} /></ParamRow>
-      <div className="grid grid-cols-2 gap-2">
-        <ParamRow label="风格"><PillGroup options={COM_STYLES} value={state.style} onChange={(v) => setState({ style: v })} /></ParamRow>
-        <ParamRow label="时长"><PillGroup options={COM_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}分`} /></ParamRow>
-      </div>
+      <ParamRow label="论述模板"><PillGroup options={Object.keys(COM_TEMPLATE_FORMULAS)} value={state.template} onChange={(v) => setState({ template: v })} /></ParamRow>
+      <ParamRow label="风格"><PillGroup options={COM_STYLES} value={state.style} onChange={(v) => setState({ style: v })} /></ParamRow>
+      <ParamRow label="时长"><PillGroup options={COM_DURATIONS} value={state.duration} onChange={(v) => setState({ duration: v })} labelFn={(v) => `${v}分`} /></ParamRow>
+      <FormulaHint formulas={COM_TEMPLATE_FORMULAS} template={state.template} />
     </div>
   )
 }
@@ -401,6 +417,7 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
   // ── Movie ──────────────────────────────────────────────────────────────────
   const [movie, setMovieRaw] = useState({
     genre: readMeta().movieGenre ?? '剧情',
+    template: Object.keys(MOVIE_TEMPLATE_FORMULAS)[0],
     arcStart: '', arcEnd: '', conflict: '', theme: '',
     ending: '喜', duration: 120,
   })
@@ -411,35 +428,35 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
   }
 
   // ── Microfilm ──────────────────────────────────────────────────────────────
-  const [microfilm, setMicrofilmRaw] = useState({ emotion: MICROFILM_EMOTIONS[0], pov: MICROFILM_POVS[1], endingMood: MICROFILM_ENDINGS[0], duration: 10 })
+  const [microfilm, setMicrofilmRaw] = useState({ emotion: MICROFILM_EMOTIONS[0], template: Object.keys(MICROFILM_TEMPLATE_FORMULAS)[0], pov: MICROFILM_POVS[1], endingMood: MICROFILM_ENDINGS[0], duration: 10 })
   const setMicrofilm = (patch: Partial<typeof microfilm>) => setMicrofilmRaw(p => ({ ...p, ...patch }))
 
   // ── Short video ────────────────────────────────────────────────────────────
-  const [sv, setSvRaw] = useState({ platform: '抖音', hookType: SV_HOOKS[0], duration: 60, purpose: SV_PURPOSES[0] })
+  const [sv, setSvRaw] = useState({ platform: '抖音', template: Object.keys(SV_TEMPLATE_FORMULAS)[0], hookType: SV_HOOKS[0], duration: 60, purpose: SV_PURPOSES[0] })
   const setSv = (patch: Partial<typeof sv>) => setSvRaw(p => ({ ...p, ...patch }))
 
   // ── Vlog ───────────────────────────────────────────────────────────────────
-  const [vlog, setVlogRaw] = useState({ vlogType: VLOG_TYPES[0], platform: 'B站', duration: 10 })
+  const [vlog, setVlogRaw] = useState({ vlogType: VLOG_TYPES[0], template: Object.keys(VLOG_TEMPLATE_FORMULAS)[0], platform: 'B站', duration: 10 })
   const setVlog = (patch: Partial<typeof vlog>) => setVlogRaw(p => ({ ...p, ...patch }))
 
   // ── Livestream ─────────────────────────────────────────────────────────────
-  const [stream, setStreamRaw] = useState({ streamType: '带货', purpose: '销售转化', duration: 2 })
+  const [stream, setStreamRaw] = useState({ streamType: '带货', template: Object.keys(STREAM_TEMPLATE_FORMULAS)[0], purpose: '销售转化', duration: 2 })
   const setStream = (patch: Partial<typeof stream>) => setStreamRaw(p => ({ ...p, ...patch }))
 
   // ── Ad ─────────────────────────────────────────────────────────────────────
-  const [ad, setAdRaw] = useState({ appealType: AD_APPEALS[0], audience: '', duration: 30 })
+  const [ad, setAdRaw] = useState({ appealType: AD_APPEALS[0], template: Object.keys(AD_TEMPLATE_FORMULAS)[0], audience: '', duration: 30 })
   const setAd = (patch: Partial<typeof ad>) => setAdRaw(p => ({ ...p, ...patch }))
 
   // ── Promo ──────────────────────────────────────────────────────────────────
-  const [promo, setPromoRaw] = useState({ subjectType: PROMO_SUBJECTS[0], style: PROMO_STYLES[0], duration: 3 })
+  const [promo, setPromoRaw] = useState({ subjectType: PROMO_SUBJECTS[0], template: Object.keys(PROMO_TEMPLATE_FORMULAS)[0], style: PROMO_STYLES[0], duration: 3 })
   const setPromo = (patch: Partial<typeof promo>) => setPromoRaw(p => ({ ...p, ...patch }))
 
   // ── MV ─────────────────────────────────────────────────────────────────────
-  const [mv, setMvRaw] = useState({ mvType: MV_TYPES[0], aesthetic: MV_AESTHETICS[0] })
+  const [mv, setMvRaw] = useState({ mvType: MV_TYPES[0], template: Object.keys(MV_TEMPLATE_FORMULAS)[0], aesthetic: MV_AESTHETICS[0] })
   const setMv = (patch: Partial<typeof mv>) => setMvRaw(p => ({ ...p, ...patch }))
 
   // ── Motion poster ──────────────────────────────────────────────────────────
-  const [poster, setPosterRaw] = useState({ posterType: POSTER_TYPES[0], visualStyle: POSTER_STYLES[0], duration: 15 })
+  const [poster, setPosterRaw] = useState({ posterType: POSTER_TYPES[0], template: Object.keys(POSTER_TEMPLATE_FORMULAS)[0], visualStyle: POSTER_STYLES[0], duration: 15 })
   const setPoster = (patch: Partial<typeof poster>) => setPosterRaw(p => ({ ...p, ...patch }))
 
   // ── Documentary ────────────────────────────────────────────────────────────
@@ -447,11 +464,11 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
   const setDoc = (patch: Partial<typeof doc>) => setDocRaw(p => ({ ...p, ...patch }))
 
   // ── Tutorial ───────────────────────────────────────────────────────────────
-  const [tut, setTutRaw] = useState({ level: TUT_LEVELS[1], teachStyle: TUT_STYLES[0], platform: 'B站', duration: 10 })
+  const [tut, setTutRaw] = useState({ level: TUT_LEVELS[1], template: Object.keys(TUT_TEMPLATE_FORMULAS)[0], teachStyle: TUT_STYLES[0], platform: 'B站', duration: 10 })
   const setTut = (patch: Partial<typeof tut>) => setTutRaw(p => ({ ...p, ...patch }))
 
   // ── Commentary ─────────────────────────────────────────────────────────────
-  const [com, setComRaw] = useState({ commentaryType: COM_TYPES[0], style: COM_STYLES[0], duration: 5 })
+  const [com, setComRaw] = useState({ commentaryType: COM_TYPES[0], template: Object.keys(COM_TEMPLATE_FORMULAS)[0], style: COM_STYLES[0], duration: 5 })
   const setCom = (patch: Partial<typeof com>) => setComRaw(p => ({ ...p, ...patch }))
 
   // ── Generation ─────────────────────────────────────────────────────────────
@@ -462,7 +479,15 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
   const [generationStage, setGenerationStage] = useState('')
   const [storyBible, setStoryBible] = useState<ShortDramaStoryBible | null>(null)
   const [qualityReport, setQualityReport] = useState<DramaQualityReport | null>(null)
+  const [awaitingBibleApproval, setAwaitingBibleApproval] = useState(false)
+  const [revisionInfo, setRevisionInfo] = useState<{ rounds: number; before?: number; after?: number } | null>(null)
+  const [consistencyWarnings, setConsistencyWarnings] = useState<ConsistencyWarning[]>([])
   const abortRef = useRef<AbortController | null>(null)
+  // Switching projects replaces the whole nodes array (loadCanvas/resetCanvas), which
+  // unmounts any node still mid-generation without aborting its in-flight fetch — the
+  // request keeps running but its eventual update targets a node that no longer exists
+  // in the store, so the work (and the API call) is silently wasted. Abort on unmount.
+  useEffect(() => () => abortRef.current?.abort(), [])
 
   const { models: textModels } = useModels({ type: 'text' })
   const [selectedModel, setSelectedModel] = useState('')
@@ -485,7 +510,7 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
     switch (contentType) {
       case 'shortdrama': return buildShortDramaPrompt({ template: drama.template, episodeCount: drama.epCount, episodeDuration: drama.epDur, brief, satisfactionType: drama.satisfactionType })
       case 'movie':      return buildMoviePrompt({ ...movie, brief })
-      case 'microfilm':  return buildMicrofilmPrompt({ coreEmotion: microfilm.emotion, pov: microfilm.pov, endingMood: microfilm.endingMood, duration: microfilm.duration, brief })
+      case 'microfilm':  return buildMicrofilmPrompt({ coreEmotion: microfilm.emotion, template: microfilm.template, pov: microfilm.pov, endingMood: microfilm.endingMood, duration: microfilm.duration, brief })
       case 'shortvideo': return buildShortVideoPrompt({ ...sv, brief })
       case 'vlog':       return buildVlogPrompt({ ...vlog, brief })
       case 'livestream': return buildLivestreamPrompt({ ...stream, brief })
@@ -499,24 +524,9 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
     }
   }, [contentType, drama, movie, microfilm, sv, vlog, stream, ad, promo, mv, poster, doc, tut, com, brief])
 
-  // ── Generate ───────────────────────────────────────────────────────────────
-  const handleGenerate = async () => {
-    if (!brief.trim() || isGenerating || !selectedModel) return
-    setIsGenerating(true)
-    setGenerated(false)
-    setCharCount(0)
-    setGenError(null)
-    setGenerationStage(contentType === 'shortdrama' ? '生成故事圣经' : '生成内容方案')
-    setStoryBible(null)
-    setQualityReport(null)
-    updateNodeData(id, { status: 'generating' })
-
-    const controller = new AbortController()
-    abortRef.current = controller
-    const { system, user } = buildPrompt()
-
-    // One text-generation call
-    const callText = async (sys: string, usr: string, opts: { temperature?: number; maxTokens?: number } = {}) => {
+  // ── Shared generation helpers (parameterized by controller so both handleGenerate
+  // and handleContinueAfterBible can share one JSON-repair implementation) ──────────
+  const callText = async (sys: string, usr: string, controller: AbortController, opts: { temperature?: number; maxTokens?: number } = {}) => {
       const res = await fetch('/api/generate/text', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -572,16 +582,17 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
       .replace(/:\s*undefined/g, ': null')
     const parseJsonStrict = (raw: string) => {
       const json = cleanupJson(raw)
-      if (!json) throw new Error('无法解析生成内容，请重试')
+      if (!json) throw new Error(`无法解析生成内容，请重试（AI 返回内容中未找到 JSON，原文前80字：${raw.slice(0, 80) || '(空)'}）`)
       return JSON.parse(json)
     }
-    const parseJson = async (raw: string) => {
+    const parseJson = async (raw: string, controller: AbortController) => {
       try {
         return parseJsonStrict(raw)
       } catch (firstErr) {
         const repairedText = await callText(
           '你是JSON修复器。把用户提供的内容修复为严格合法JSON，只返回JSON，不要解释，不要Markdown。尤其要修复字符串值内部未转义的英文双引号，把它们改成中文引号或正确转义。',
           `下面内容不是合法JSON。请在不改写字段含义的前提下修复语法错误，保留原有结构和数据，只返回合法JSON。注意：字符串内容里的称谓、台词、片名不要使用未转义英文双引号。\n\n${raw.slice(0, 18000)}`,
+          controller,
           { temperature: 0.05, maxTokens: 10000 },
         )
         try {
@@ -592,12 +603,27 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
       }
     }
 
-    try {
-      let parsed: any
-      let bible: ShortDramaStoryBible | null = null
-      let review: DramaQualityReport | null = null
+  // ── Generate: shortdrama stops after the story bible for user approval;
+  // every other content type still runs straight through in one shot. ──────────────
+  const handleGenerate = async () => {
+    if (!brief.trim() || isGenerating || !selectedModel) return
+    setIsGenerating(true)
+    setGenerated(false)
+    setCharCount(0)
+    setGenError(null)
+    setStoryBible(null)
+    setQualityReport(null)
+    setAwaitingBibleApproval(false)
+    setRevisionInfo(null)
+    setConsistencyWarnings([])
+    updateNodeData(id, { status: 'generating' })
 
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    try {
       if (contentType === 'shortdrama') {
+        setGenerationStage('生成故事圣经')
         const biblePrompt = buildShortDramaBiblePrompt({
           template: drama.template,
           episodeCount: drama.epCount,
@@ -605,80 +631,198 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
           brief,
           satisfactionType: drama.satisfactionType,
         })
-        const bibleText = await callText(biblePrompt.system, biblePrompt.user)
+        const bibleText = await callText(biblePrompt.system, biblePrompt.user, controller, { maxTokens: 16000 })
         setCharCount((c) => c + bibleText.length)
-        bible = await parseJson(bibleText) as ShortDramaStoryBible
+        const bible = await parseJson(bibleText, controller) as ShortDramaStoryBible
         setStoryBible(bible)
+        setAwaitingBibleApproval(true)
+        updateNodeData(id, { status: 'ready' })
+        return
+      }
 
-        setGenerationStage('生成分集大纲')
-        const outlinePrompt = buildShortDramaPrompt({
-          template: drama.template,
-          episodeCount: drama.epCount,
-          episodeDuration: drama.epDur,
-          brief,
-          satisfactionType: drama.satisfactionType,
-          bible,
+      setGenerationStage('生成内容方案')
+      const { system, user } = buildPrompt()
+      const fullText = await callText(system, user, controller, { maxTokens: 16000 })
+      setCharCount(fullText.length)
+      let parsed = await parseJson(fullText, controller)
+      if (!parsed.title) throw new Error('格式错误：缺少标题字段')
+
+      // ── Generic quality loop: same "review, auto-revise if below threshold, keep
+      // best across rounds" idea as short drama, just without episode batching since
+      // every other type generates one piece in one shot. ──
+      const typeLabel = CONTENT_TYPE_LABELS[contentType]
+      const contentAsString = (p: { content?: unknown }) =>
+        typeof p.content === 'string' ? p.content : JSON.stringify(p, null, 2)
+      const runGenericQualityReview = async (target: { title: string; synopsis?: string; content?: unknown }) => {
+        const reviewPrompt = buildGenericQualityReviewPrompt({
+          contentType, typeLabel,
+          title: target.title, synopsis: target.synopsis || '', content: contentAsString(target),
         })
-        const outlineText = await callText(outlinePrompt.system, outlinePrompt.user)
-        setCharCount((c) => c + outlineText.length)
-        parsed = await parseJson(outlineText)
-        parsed = {
-          ...parsed,
-          title: parsed.title || bible.title,
-          synopsis: parsed.synopsis || bible.synopsis,
-          firstHook: parsed.firstHook || bible.firstHook,
-          storyBible: bible.storyBible,
-          characters: parsed.characters?.length ? parsed.characters : (bible.characters ?? []),
-          content: parsed.content || bible.content || '',
+        const reviewText = await callText(reviewPrompt.system, reviewPrompt.user, controller, { maxTokens: 16000 })
+        setCharCount((c) => c + reviewText.length)
+        return await parseJson(reviewText, controller) as DramaQualityReport
+      }
+
+      setGenerationStage('内容质检')
+      let review = await runGenericQualityReview(parsed)
+      setQualityReport(review)
+
+      const QUALITY_THRESHOLD = 85
+      const MAX_AUTO_REVISE_ROUNDS = 3
+      const scoreBefore = review.totalScore
+      let bestParsed = parsed
+      let bestReview = review
+      let rounds = 0
+      while (
+        typeof bestReview.totalScore === 'number' && bestReview.totalScore < QUALITY_THRESHOLD &&
+        rounds < MAX_AUTO_REVISE_ROUNDS
+      ) {
+        rounds++
+        setGenerationStage(`按质检建议改稿（第${rounds}轮）`)
+        const rewritePrompt = buildGenericRewriteByQualityPrompt({
+          contentType, typeLabel,
+          title: bestParsed.title, synopsis: bestParsed.synopsis || '', content: contentAsString(bestParsed),
+          qualityReport: bestReview,
+        })
+        const rewriteText = await callText(rewritePrompt.system, rewritePrompt.user, controller, { maxTokens: 16000 })
+        setCharCount((c) => c + rewriteText.length)
+        const rewritten = await parseJson(rewriteText, controller)
+        if (!rewritten.title) continue // malformed rewrite — skip, still counts toward the round cap
+
+        const candidateParsed = {
+          ...bestParsed,
+          title: rewritten.title,
+          synopsis: rewritten.synopsis ?? bestParsed.synopsis,
+          content: rewritten.content ?? bestParsed.content,
         }
-      } else {
-        const fullText = await callText(system, user)
-        setCharCount(fullText.length)
-        parsed = await parseJson(fullText)
+        setGenerationStage(`重新质检（第${rounds}轮）`)
+        const candidateReview = await runGenericQualityReview(candidateParsed)
+        const improved = typeof candidateReview.totalScore === 'number'
+          && (typeof bestReview.totalScore !== 'number' || candidateReview.totalScore > bestReview.totalScore)
+        if (improved) {
+          bestParsed = candidateParsed
+          bestReview = candidateReview
+          setQualityReport(bestReview)
+        }
+      }
+      parsed = bestParsed
+      review = bestReview
+      setQualityReport(review)
+      if (rounds > 0) {
+        setRevisionInfo({ rounds, before: scoreBefore, after: review.totalScore })
+      }
+
+      setGenerationStage('创建剧本节点')
+      createScreenplayNode(id, {
+        title: parsed.title,
+        synopsis: parsed.synopsis || '',
+        content: contentAsString(parsed),
+        scriptDuration: '',
+        styles: [CONTENT_TYPE_LABELS[contentType]],
+        contentType,
+        firstHook: parsed.firstHook,
+        qualityReport: review,
+      })
+      setGenerated(true)
+      updateNodeData(id, { status: 'completed' })
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        updateNodeData(id, { status: brief.trim() ? 'ready' : 'idle' })
+        return
+      }
+      setGenError(err instanceof Error ? err.message : '未知错误')
+      updateNodeData(id, { status: 'failed' })
+    } finally {
+      setIsGenerating(false)
+      setGenerationStage('')
+      abortRef.current = null
+    }
+  }
+
+  // ── Continue after bible approval: outline batches (fed a rolling continuity
+  // summary) → auto quality-revise loop → deterministic consistency check → screenplay node ──
+  const handleContinueAfterBible = async () => {
+    if (!storyBible || isGenerating || !selectedModel) return
+    setIsGenerating(true)
+    setGenError(null)
+    setAwaitingBibleApproval(false)
+    updateNodeData(id, { status: 'generating' })
+
+    const controller = new AbortController()
+    abortRef.current = controller
+    const bible = storyBible
+
+    try {
+      setGenerationStage('生成分集大纲')
+      const outlinePrompt = buildShortDramaPrompt({
+        template: drama.template,
+        episodeCount: drama.epCount,
+        episodeDuration: drama.epDur,
+        brief,
+        satisfactionType: drama.satisfactionType,
+        bible,
+      })
+      const outlineText = await callText(outlinePrompt.system, outlinePrompt.user, controller, { maxTokens: 16000 })
+      setCharCount((c) => c + outlineText.length)
+      let parsed = await parseJson(outlineText, controller)
+      parsed = {
+        ...parsed,
+        title: parsed.title || bible.title,
+        synopsis: parsed.synopsis || bible.synopsis,
+        firstHook: parsed.firstHook || bible.firstHook,
+        storyBible: bible.storyBible,
+        characters: parsed.characters?.length ? parsed.characters : (bible.characters ?? []),
+        content: parsed.content || bible.content || '',
       }
       if (!parsed.title) throw new Error('格式错误：缺少标题字段')
 
-      // Short drama: the first call yields up to DRAMA_BATCH_SIZE episode outlines.
-      // Fill the rest in continuation batches until we reach the chosen episode count.
-      if (contentType === 'shortdrama') {
-        if (!Array.isArray(parsed.episodes) || parsed.episodes.length === 0) {
-          throw new Error('分集大纲为空，请重试')
-        }
-        const target = drama.epCount
-        let episodes = [...parsed.episodes]
-        let guard = 0
-        while (episodes.length < target && guard < 20) {
-          setGenerationStage(`补充分集 ${episodes.length + 1}-${Math.min(target, episodes.length + DRAMA_BATCH_SIZE)}`)
-          guard++
-          const from = episodes.length + 1
-          const to = Math.min(target, episodes.length + DRAMA_BATCH_SIZE)
-          const prev = episodes[episodes.length - 1]
-          const { system: bs, user: bu } = buildDramaEpisodesBatchPrompt({
-            from, to,
-            template: drama.template,
-            satisfactionType: drama.satisfactionType,
-            episodeDuration: drama.epDur,
-            title: parsed.title,
-            synopsis: parsed.synopsis || '',
-            characters: parsed.characters ?? [],
-            content: typeof parsed.content === 'string' ? parsed.content : '',
-            previousCliffhanger: prev?.cliffhanger,
-          })
-          const batchText = await callText(bs, bu)
-          setCharCount((c) => c + batchText.length)
-          const batchParsed = await parseJson(batchText)
-          const batchEps = batchParsed.episodes
-          if (!Array.isArray(batchEps) || batchEps.length === 0) {
-            throw new Error(`第${from}-${to}集生成为空，请重试`)
-          }
-          episodes = [...episodes, ...batchEps]
-        }
-        if (episodes.length < target) {
-          throw new Error(`分集数量不足：需要${target}集，实际生成${episodes.length}集，请重试`)
-        }
-        parsed.episodes = episodes.slice(0, target).map((e, i) => ({ ...e, ep: e.ep ?? i + 1 }))
+      if (!Array.isArray(parsed.episodes) || parsed.episodes.length === 0) {
+        throw new Error('分集大纲为空，请重试')
+      }
 
-        setGenerationStage('编剧质检')
+      // First call yields up to DRAMA_BATCH_SIZE episode outlines.
+      // Fill the rest in continuation batches until we reach the chosen episode count.
+      const target = drama.epCount
+      let episodes = [...parsed.episodes]
+      let guard = 0
+      while (episodes.length < target && guard < 20) {
+        setGenerationStage(`补充分集 ${episodes.length + 1}-${Math.min(target, episodes.length + DRAMA_BATCH_SIZE)}`)
+        guard++
+        const from = episodes.length + 1
+        const to = Math.min(target, episodes.length + DRAMA_BATCH_SIZE)
+        const prev = episodes[episodes.length - 1]
+        const worldStateSummary = buildContinuitySummary(
+          { mustKeep: bible.storyBible?.mustKeep, taboo: bible.storyBible?.taboo, coreConflict: bible.storyBible?.coreConflict },
+          episodes,
+        )
+        const { system: bs, user: bu } = buildDramaEpisodesBatchPrompt({
+          from, to,
+          template: drama.template,
+          satisfactionType: drama.satisfactionType,
+          episodeDuration: drama.epDur,
+          title: parsed.title,
+          synopsis: parsed.synopsis || '',
+          characters: parsed.characters ?? [],
+          content: typeof parsed.content === 'string' ? parsed.content : '',
+          previousCliffhanger: prev?.cliffhanger,
+          worldStateSummary,
+        })
+        const batchText = await callText(bs, bu, controller, { maxTokens: 16000 })
+        setCharCount((c) => c + batchText.length)
+        const batchParsed = await parseJson(batchText, controller)
+        const batchEps = batchParsed.episodes
+        if (!Array.isArray(batchEps) || batchEps.length === 0) {
+          throw new Error(`第${from}-${to}集生成为空，请重试`)
+        }
+        episodes = [...episodes, ...batchEps]
+      }
+      if (episodes.length < target) {
+        throw new Error(`分集数量不足：需要${target}集，实际生成${episodes.length}集，请重试`)
+      }
+      parsed.episodes = episodes.slice(0, target).map((e, i) => ({ ...e, ep: e.ep ?? i + 1 }))
+
+      setGenerationStage('编剧质检')
+      const runQualityReview = async () => {
         const reviewPrompt = buildDramaQualityReviewPrompt({
           title: parsed.title,
           synopsis: parsed.synopsis || '',
@@ -687,39 +831,117 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
           episodes: parsed.episodes ?? [],
           episodeDuration: drama.epDur,
         })
-        const reviewText = await callText(reviewPrompt.system, reviewPrompt.user)
+        const reviewText = await callText(reviewPrompt.system, reviewPrompt.user, controller, { maxTokens: 16000 })
         setCharCount((c) => c + reviewText.length)
-        review = await parseJson(reviewText) as DramaQualityReport
-        setQualityReport(review)
+        return await parseJson(reviewText, controller) as DramaQualityReport
+      }
+      let review = await runQualityReview()
+      setQualityReport(review)
+
+      // ── Auto quality-revise loop: reuses the same rewrite prompt the screenplay
+      // node's manual "按建议改稿" button calls, automated with a round cap. LLM rewrites
+      // aren't monotonic — a "fix" pass can just as easily lower the score (batched
+      // rewrites in particular can drift on cross-episode consistency). So every round is
+      // scored against the best version found so far, and only kept if it's an actual
+      // improvement; the final result can never be worse than where this started.
+      const QUALITY_THRESHOLD = 85
+      const MAX_AUTO_REVISE_ROUNDS = 3
+      const scoreBefore = review.totalScore
+      let bestParsed = parsed
+      let bestReview = review
+      let rounds = 0
+      while (
+        typeof bestReview.totalScore === 'number' && bestReview.totalScore < QUALITY_THRESHOLD &&
+        rounds < MAX_AUTO_REVISE_ROUNDS
+      ) {
+        rounds++
+        // Rewriting every episode in one call scales badly — a 20+ episode season can
+        // overrun any maxTokens budget before the model finishes. Batch it the same way
+        // the outline continuation loop above already does. Always rewrite from the best
+        // version so far, not the last (possibly-discarded) attempt.
+        const sourceEpisodes = bestParsed.episodes
+        let rewrittenEpisodes: { ep?: number }[] = []
+        let batchFailed = false
+        for (let from = 1; from <= sourceEpisodes.length; from += DRAMA_BATCH_SIZE) {
+          const to = Math.min(from + DRAMA_BATCH_SIZE - 1, sourceEpisodes.length)
+          setGenerationStage(`按质检建议改稿（第${rounds}轮 · 第${from}-${to}集）`)
+          const rewritePrompt = buildDramaRewriteByQualityPrompt({
+            title: bestParsed.title,
+            synopsis: bestParsed.synopsis || '',
+            content: typeof bestParsed.content === 'string' ? bestParsed.content : '',
+            storyBible: bestParsed.storyBible,
+            characters: bestParsed.characters ?? [],
+            episodes: sourceEpisodes,
+            episodeDuration: drama.epDur,
+            template: drama.template,
+            qualityReport: bestReview,
+            rewriteFrom: from,
+            rewriteTo: to,
+          })
+          const rewriteText = await callText(rewritePrompt.system, rewritePrompt.user, controller, { maxTokens: 16000 })
+          setCharCount((c) => c + rewriteText.length)
+          const rewritten = await parseJson(rewriteText, controller)
+          const batchEps = Array.isArray(rewritten.episodes) ? rewritten.episodes : []
+          if (batchEps.length !== to - from + 1) {
+            batchFailed = true
+            break
+          }
+          rewrittenEpisodes = [...rewrittenEpisodes, ...batchEps]
+        }
+        if (batchFailed) break // couldn't produce a full candidate this round — stop, keep the best version found so far
+
+        const candidateParsed = {
+          ...bestParsed,
+          episodes: rewrittenEpisodes.map((e, i) => ({ ...e, ep: e.ep ?? i + 1 })),
+        }
+        parsed = candidateParsed // runQualityReview reads `parsed` from closure
+        setGenerationStage(`重新质检（第${rounds}轮）`)
+        const candidateReview = await runQualityReview()
+
+        const improved = typeof candidateReview.totalScore === 'number'
+          && (typeof bestReview.totalScore !== 'number' || candidateReview.totalScore > bestReview.totalScore)
+        if (improved) {
+          bestParsed = candidateParsed
+          bestReview = candidateReview
+          setQualityReport(bestReview)
+        }
+        // else: this round made things worse (or no better) — discard it, next round (if any) retries from bestParsed
+      }
+      parsed = bestParsed
+      review = bestReview
+      setQualityReport(review)
+      if (rounds > 0) {
+        setRevisionInfo({ rounds, before: scoreBefore, after: review.totalScore })
       }
 
-      const contentStr = typeof parsed.content === 'string'
-        ? parsed.content
-        : JSON.stringify(parsed, null, 2)
+      setConsistencyWarnings(checkDramaConsistency({
+        characters: parsed.characters ?? [],
+        mustKeep: bible.storyBible?.mustKeep,
+        episodes: parsed.episodes ?? [],
+      }))
 
-      const isDrama = contentType === 'shortdrama'
       setGenerationStage('创建剧本节点')
       createScreenplayNode(id, {
         title: parsed.title,
         synopsis: parsed.synopsis || '',
-        content: contentStr,
-        scriptDuration: isDrama ? `${drama.epCount}集 × ${drama.epDur}秒` : '',
-        styles: [CONTENT_TYPE_LABELS[contentType]],
-        contentType,
-        dramaTemplate: isDrama ? drama.template : undefined,
+        content: typeof parsed.content === 'string' ? parsed.content : JSON.stringify(parsed, null, 2),
+        scriptDuration: `${drama.epCount}集 × ${drama.epDur}秒`,
+        styles: [CONTENT_TYPE_LABELS.shortdrama],
+        contentType: 'shortdrama',
+        dramaTemplate: drama.template,
         firstHook: parsed.firstHook,
-        episodeDuration: isDrama ? drama.epDur : undefined,
-        characters: isDrama ? (parsed.characters ?? []) : undefined,
-        episodes: isDrama ? (parsed.episodes ?? []) : undefined,
-        storyBible: isDrama ? (parsed.storyBible ?? bible?.storyBible) : undefined,
-        qualityReport: isDrama ? review : undefined,
+        episodeDuration: drama.epDur,
+        characters: parsed.characters ?? [],
+        episodes: parsed.episodes ?? [],
+        storyBible: parsed.storyBible ?? bible.storyBible,
+        qualityReport: review,
       })
 
       setGenerated(true)
       updateNodeData(id, { status: 'completed' })
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
-        updateNodeData(id, { status: brief.trim() ? 'ready' : 'idle' })
+        updateNodeData(id, { status: 'ready' })
         return
       }
       setGenError(err instanceof Error ? err.message : '未知错误')
@@ -738,6 +960,9 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
     setGenerationStage('')
     setStoryBible(null)
     setQualityReport(null)
+    setAwaitingBibleApproval(false)
+    setRevisionInfo(null)
+    setConsistencyWarnings([])
     updateNodeData(id, { status: brief.trim() ? 'ready' : 'idle' })
   }
 
@@ -767,9 +992,9 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
       selected={selected}
       onDelete={() => deleteNode(id)}
       icon={<FileCode2 className="size-3.5" />}
-      width="w-[440px]"
+      width="w-[820px]"
     >
-      {/* ── Type selector ── */}
+      {/* ── Type selector — full width so the pill groups wrap less ── */}
       <div className="nodrag nopan space-y-1.5" onPointerDown={(e) => e.stopPropagation()}>
         {CONTENT_GROUPS.map(({ label, types }) => (
           <div key={label} className="flex items-center gap-1.5">
@@ -791,7 +1016,8 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
         ))}
       </div>
 
-      {/* ── Type-specific params ── */}
+      {/* ── Type-specific params — full node width so pill groups flow left-to-right
+           instead of wrapping into a cramped narrow column ── */}
       <div className="nodrag nopan mt-3 rounded-xl border border-border/30 bg-muted/10 p-3"
         onPointerDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
         {contentType === 'shortdrama'   && <ShortDramaParams state={drama} setState={setDrama} />}
@@ -820,88 +1046,165 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
         </div>
       )}
 
-      {/* ── Brief input ── */}
-      <div className="nodrag nopan relative mt-2.5 rounded-xl border border-border/50 bg-muted/20 transition-colors focus-within:border-primary/60 focus-within:ring-1 focus-within:ring-primary/20"
-        onPointerDown={(e) => e.stopPropagation()}>
-        <CopyButton text={brief} iconOnly title="复制创意方向" className="absolute right-2 bottom-2 z-10" />
-        <textarea
-          value={brief}
-          onChange={(e) => handleBriefChange(e.target.value)}
-          onKeyDown={(e) => e.stopPropagation()}
-          placeholder={briefPlaceholder[contentType] ?? '输入你的创意方向...'}
-          rows={3}
-          className="nodrag nopan block w-full resize-none bg-transparent px-3.5 py-3 pb-8 text-[13px] leading-relaxed text-foreground placeholder:text-muted-foreground/40 focus:outline-none"
-        />
-      </div>
-
-      {/* ── Generation status ── */}
-      {isGenerating && (
-        <div className="mt-2.5 flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/5 px-3.5 py-3">
-          <Loader2 className="size-4 animate-spin text-primary" />
-          <span className="text-[12px] text-primary">{generationStage ? `AI 正在${generationStage}...` : 'AI 正在创作...'}</span>
-          {charCount > 0 && <span className="ml-auto text-[10px] text-primary/50">{charCount.toLocaleString()} 字</span>}
+      {/* ── Brief input — full width, with status/results stacked directly below once
+           there's something to show. No reserved placeholder box while idle. ── */}
+      <div className="mt-2.5 space-y-2.5">
+        <div className="nodrag nopan relative rounded-xl border border-border/50 bg-muted/20 transition-colors focus-within:border-primary/60 focus-within:ring-1 focus-within:ring-primary/20"
+          onPointerDown={(e) => e.stopPropagation()}>
+          <CopyButton text={brief} iconOnly title="复制创意方向" className="absolute right-2 bottom-2 z-10" />
+          <textarea
+            value={brief}
+            onChange={(e) => handleBriefChange(e.target.value)}
+            onKeyDown={(e) => e.stopPropagation()}
+            placeholder={briefPlaceholder[contentType] ?? '输入你的创意方向...'}
+            rows={3}
+            className="nodrag nopan block w-full resize-none bg-transparent px-3.5 py-3 pb-8 text-[13px] leading-relaxed text-foreground placeholder:text-muted-foreground/40 focus:outline-none"
+          />
         </div>
-      )}
 
-      {genError && !isGenerating && (
-        <div className="mt-2.5 rounded-xl border border-red-500/20 bg-red-500/5 px-3.5 py-2.5 text-[12px] text-red-400">
-          生成失败：{genError}
-        </div>
-      )}
-
-      {generated && !isGenerating && (
-        <>
-          <div className="mt-2.5 flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3.5 py-2.5">
-            <Check className="size-3.5 text-emerald-500" />
-            <span className="text-[12px] text-emerald-400">已生成，剧本节点已创建在画布上</span>
-          </div>
-          {contentType === 'shortdrama' && (qualityReport || storyBible) && (
-            <div className="mt-2.5 rounded-xl border border-border/40 bg-muted/10 px-3.5 py-3">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[12px] font-semibold text-foreground/85">编剧质检</span>
-                <div className="flex items-center gap-1.5">
-                  <CopyButton
-                    text={[
-                      qualityReport?.totalScore !== undefined ? `总分：${qualityReport.totalScore}/100` : '',
-                      qualityReport?.verdict ? `结论：${qualityReport.verdict}` : '',
-                      qualityReport?.risks?.length ? `风险：\n${qualityReport.risks.map((x) => `- ${x}`).join('\n')}` : '',
-                      qualityReport?.rewriteSuggestions?.length ? `改稿建议：\n${qualityReport.rewriteSuggestions.map((x) => `- ${x}`).join('\n')}` : '',
-                    ].filter(Boolean).join('\n\n')}
-                    iconOnly
-                    title="复制编剧质检"
-                  />
-                  {typeof qualityReport?.totalScore === 'number' && (
-                    <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
-                      {qualityReport.totalScore}/100
-                    </span>
-                  )}
-                </div>
-              </div>
-              {qualityReport?.verdict && (
-                <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">{qualityReport.verdict}</p>
-              )}
-              {qualityReport?.risks && qualityReport.risks.length > 0 && (
-                <div className="mt-2">
-                  <div className="text-[10px] font-medium text-red-400/80">风险</div>
-                  <ul className="mt-1 space-y-1 text-[11px] leading-relaxed text-muted-foreground">
-                    {qualityReport.risks.slice(0, 2).map((item, i) => <li key={i}>• {item}</li>)}
-                  </ul>
-                </div>
-              )}
-              {qualityReport?.rewriteSuggestions && qualityReport.rewriteSuggestions.length > 0 && (
-                <div className="mt-2">
-                  <div className="text-[10px] font-medium text-amber-500/85">改稿建议</div>
-                  <ul className="mt-1 space-y-1 text-[11px] leading-relaxed text-muted-foreground">
-                    {qualityReport.rewriteSuggestions.slice(0, 3).map((item, i) => <li key={i}>• {item}</li>)}
-                  </ul>
-                </div>
-              )}
+          {isGenerating && (
+            <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/5 px-3.5 py-3">
+              <Loader2 className="size-4 animate-spin text-primary" />
+              <span className="text-[12px] text-primary">{generationStage ? `AI 正在${generationStage}...` : 'AI 正在创作...'}</span>
+              {charCount > 0 && <span className="ml-auto text-[10px] text-primary/50">{charCount.toLocaleString()} 字</span>}
             </div>
           )}
-        </>
-      )}
+
+          {genError && !isGenerating && (
+            <div className="rounded-xl border border-red-500/20 bg-red-500/5 px-3.5 py-2.5 text-[12px] text-red-400">
+              生成失败：{genError}
+            </div>
+          )}
+
+          {/* ── Bible approval gate: pause before the expensive multi-batch outline fan-out ── */}
+          {awaitingBibleApproval && !isGenerating && storyBible && (
+            <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 px-3.5 py-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[12px] font-semibold text-amber-500">故事圣经 · 待确认</span>
+                <CopyButton
+                  text={[
+                    storyBible.title ? `剧名：${storyBible.title}` : '',
+                    storyBible.synopsis ? `概要：${storyBible.synopsis}` : '',
+                    storyBible.storyBible?.logline ? `卖点：${storyBible.storyBible.logline}` : '',
+                    storyBible.storyBible?.coreConflict ? `核心矛盾：${storyBible.storyBible.coreConflict}` : '',
+                  ].filter(Boolean).join('\n')}
+                  iconOnly
+                  title="复制故事圣经"
+                />
+              </div>
+              <p className="mt-1.5 text-[13px] font-medium text-foreground">{storyBible.title}</p>
+              {storyBible.synopsis && (
+                <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">{storyBible.synopsis}</p>
+              )}
+              {storyBible.storyBible?.coreConflict && (
+                <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                  <span className="text-foreground/70">核心矛盾：</span>{storyBible.storyBible.coreConflict}
+                </p>
+              )}
+              {storyBible.characters && storyBible.characters.length > 0 && (
+                <p className="mt-1.5 text-[11px] text-muted-foreground">
+                  <span className="text-foreground/70">角色：</span>{storyBible.characters.map((c) => c.name).join('、')}
+                </p>
+              )}
+              <div className="mt-2.5 flex items-center gap-1.5">
+                <button onPointerDown={(e) => e.stopPropagation()} onClick={handleGenerate}
+                  className="flex items-center gap-1 rounded-full border border-border/40 px-2.5 py-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted/30">
+                  <RotateCcw className="size-3" />
+                  重新生成故事圣经
+                </button>
+                <div className="flex-1" />
+                <button onPointerDown={(e) => e.stopPropagation()} onClick={handleContinueAfterBible}
+                  disabled={!selectedModel}
+                  className="flex items-center gap-1.5 rounded-full bg-primary px-3.5 py-1.5 text-[11px] font-medium text-primary-foreground shadow-md shadow-primary/20 transition-all hover:bg-primary/90 active:scale-95 disabled:opacity-40">
+                  继续生成分集大纲
+                  <ArrowRight className="size-3" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {generated && !isGenerating && (
+            <>
+              <div className="flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3.5 py-2.5">
+                <Check className="size-3.5 text-emerald-500" />
+                <span className="text-[12px] text-emerald-400">已生成，剧本节点已创建在画布上</span>
+              </div>
+              {(qualityReport || storyBible) && (
+                <div className="rounded-xl border border-border/40 bg-muted/10 px-3.5 py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[12px] font-semibold text-foreground/85">编剧质检</span>
+                    <div className="flex items-center gap-1.5">
+                      <CopyButton
+                        text={[
+                          qualityReport?.totalScore !== undefined ? `总分：${qualityReport.totalScore}/100` : '',
+                          qualityReport?.verdict ? `结论：${qualityReport.verdict}` : '',
+                          qualityReport?.risks?.length ? `风险：\n${qualityReport.risks.map((x) => `- ${x}`).join('\n')}` : '',
+                          qualityReport?.rewriteSuggestions?.length ? `改稿建议：\n${qualityReport.rewriteSuggestions.map((x) => `- ${x}`).join('\n')}` : '',
+                        ].filter(Boolean).join('\n\n')}
+                        iconOnly
+                        title="复制编剧质检"
+                      />
+                      {typeof qualityReport?.totalScore === 'number' && (
+                        <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
+                          {qualityReport.totalScore}/100
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {qualityReport?.verdict && (
+                    <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">{qualityReport.verdict}</p>
+                  )}
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    {qualityReport?.risks && qualityReport.risks.length > 0 && (
+                      <div>
+                        <div className="text-[10px] font-medium text-red-400/80">风险</div>
+                        <ul className="mt-1 space-y-1 text-[11px] leading-relaxed text-muted-foreground">
+                          {qualityReport.risks.slice(0, 3).map((item, i) => <li key={i}>• {item}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                    {qualityReport?.rewriteSuggestions && qualityReport.rewriteSuggestions.length > 0 && (
+                      <div>
+                        <div className="text-[10px] font-medium text-amber-500/85">改稿建议</div>
+                        <ul className="mt-1 space-y-1 text-[11px] leading-relaxed text-muted-foreground">
+                          {qualityReport.rewriteSuggestions.slice(0, 3).map((item, i) => <li key={i}>• {item}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              {revisionInfo && (() => {
+                const hasScores = typeof revisionInfo.before === 'number' && typeof revisionInfo.after === 'number'
+                const improved = hasScores && revisionInfo.after! > revisionInfo.before!
+                return (
+                  <div className={cn(
+                    'rounded-xl border px-3.5 py-2.5 text-[12px]',
+                    improved ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-400' : 'border-amber-500/20 bg-amber-500/5 text-amber-500',
+                  )}>
+                    {improved
+                      ? <>已按质检建议自动改稿 {revisionInfo.rounds} 轮：{revisionInfo.before}分 → {revisionInfo.after}分</>
+                      : <>已尝试自动改稿 {revisionInfo.rounds} 轮，未能进一步提升分数（保留改稿前的最佳版本，当前 {revisionInfo.after ?? revisionInfo.before} 分），可点击下方"重新生成"再试</>}
+                  </div>
+                )
+              })()}
+              {consistencyWarnings.length > 0 && (
+                <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-3.5 py-2.5">
+                  <div className="flex items-center gap-1.5 text-[11px] font-medium text-amber-500">
+                    <AlertTriangle className="size-3" />
+                    连续性提示（{consistencyWarnings.length}）
+                  </div>
+                  <ul className="mt-1.5 space-y-1 text-[11px] leading-relaxed text-muted-foreground">
+                    {consistencyWarnings.slice(0, 5).map((w, i) => <li key={i}>• {w.message}</li>)}
+                  </ul>
+                </div>
+              )}
+            </>
+          )}
+      </div>
 
       {/* ── Bottom bar ── */}
+
       <div className="-mx-3.5 mt-3 flex items-center gap-1.5 border-t border-border/40 px-3.5 pt-2.5">
         <ModelSelector models={textModels} selected={selectedModel} onSelect={setSelectedModel} />
         <div className="flex-1" />
@@ -917,7 +1220,7 @@ function ScriptNode({ id, data, selected }: ScriptNodeProps) {
             <RotateCcw className="size-3" />
             重新生成
           </button>
-        ) : (
+        ) : awaitingBibleApproval ? null : (
           <button onPointerDown={(e) => e.stopPropagation()} onClick={handleGenerate}
             disabled={!brief.trim() || !selectedModel || isGenerating}
             className="flex items-center gap-1.5 rounded-full bg-primary px-3.5 py-1.5 text-[11px] font-medium text-primary-foreground shadow-md shadow-primary/20 transition-all hover:bg-primary/90 active:scale-95 disabled:opacity-40">

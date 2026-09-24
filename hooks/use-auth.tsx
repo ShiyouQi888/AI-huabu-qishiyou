@@ -1,6 +1,7 @@
 'use client'
 
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
+import { usePathname } from 'next/navigation'
 
 interface User {
   id: string
@@ -18,16 +19,24 @@ interface AuthContext {
 const AuthCtx = createContext<AuthContext | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const pathname = usePathname()
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    if (pathname === '/login' || pathname === '/register' || pathname === '/forgot-password') {
+      setUser(null)
+      setLoading(false)
+      return
+    }
+
+    setLoading(true)
     fetch('/api/auth/me')
       .then((r) => r.json())
       .then((d) => setUser(d.user ?? null))
       .catch(() => setUser(null))
       .finally(() => setLoading(false))
-  }, [])
+  }, [pathname])
 
   const login = useCallback(async (username: string, password: string) => {
     const res = await fetch('/api/auth/login', {

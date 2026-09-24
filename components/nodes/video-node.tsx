@@ -63,7 +63,12 @@ const RATIOS: { id: Ratio; label: string; w: number; h: number }[] = [
   { id: 'auto',  label: '智能',  w: 0,  h: 0 },
 ]
 const RESOLUTIONS: Resolution[] = ['480p', '720p', '1080p']
-const MAX_REF = 15
+const DEFAULT_REFERENCE_LIMITS = { image: 9, video: 3, audio: 3, total: 15 } as const
+const SEEDANCE_25_REFERENCE_LIMITS = { image: 30, video: 10, audio: 10, total: 50 } as const
+
+function getReferenceLimits(modelId: string) {
+  return modelId.includes('seedance-2-5') ? SEEDANCE_25_REFERENCE_LIMITS : DEFAULT_REFERENCE_LIMITS
+}
 
 type VideoNodeProps = NodeProps<Node<CustomNodeData>>
 
@@ -111,7 +116,12 @@ function VideoInputNode({ id, data, selected }: VideoNodeProps) {
       status={data.status}
       selected={selected}
       onDelete={() => deleteNode(id)}
-      icon={<Video className="size-3.5" />}
+      icon={(
+        <span className="relative flex size-4 items-center justify-center text-violet-400">
+          <Video className="size-3.5" />
+          <Upload className="absolute -bottom-1 -right-1 size-2.5 rounded-sm bg-card p-px" />
+        </span>
+      )}
       hasInput={false}
       hasOutput={true}
       widthPx={nodeWidth}
@@ -389,6 +399,26 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
   const [isGenerating, setIsGenerating] = useState(false)
   const [inputCreated, setInputCreated] = useState<Partial<Record<Tab, boolean>>>({})
   const refCount = useFlowStore((s) => s.edges.filter((e) => e.target === id && e.targetHandle === TAB_HANDLES.ref).length)
+  const imageReferenceCount = useFlowStore((s) => s.edges.reduce((count, edge) => {
+    if (edge.target !== id || edge.targetHandle !== TAB_HANDLES.ref) return count
+    const source = s.nodes.find((node) => node.id === edge.source)
+    return source?.data.type === 'image' ? count + 1 : count
+  }, 0))
+  const videoReferenceCount = useFlowStore((s) => s.edges.reduce((count, edge) => {
+    if (edge.target !== id || edge.targetHandle !== TAB_HANDLES.ref) return count
+    const source = s.nodes.find((node) => node.id === edge.source)
+    return source?.data.type === 'video' ? count + 1 : count
+  }, 0))
+  const audioReferenceCount = useFlowStore((s) => s.edges.reduce((count, edge) => {
+    if (edge.target !== id || edge.targetHandle !== TAB_HANDLES.ref) return count
+    const source = s.nodes.find((node) => node.id === edge.source)
+    return source?.data.type === 'audio' ? count + 1 : count
+  }, 0))
+  const referenceNodeCounts = {
+    image: imageReferenceCount,
+    video: videoReferenceCount,
+    audio: audioReferenceCount,
+  }
   const [prompt, setPrompt] = useState<string>((data.content as string) || '')
   const [isOptimizing, setIsOptimizing] = useState(false)
   const connectedPrompt = useConnectedPrompt(id)
@@ -398,7 +428,7 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
   const [mentionOpen, setMentionOpen] = useState(false)
   const [mentionQuery, setMentionQuery] = useState('')
   const [mentionStart, setMentionStart] = useState(0)
-  const [mentionItems, setMentionItems] = useState<Array<{ id: string; label: string; url: string; type: 'image' | 'video' }>>([])
+  const [mentionItems, setMentionItems] = useState<Array<{ id: string; label: string; url: string; type: 'image' | 'video' | 'audio' }>>([])
   const [mentionIndex, setMentionIndex] = useState(0)
   // ── 模型列表（从后端动态获取）
   const { models: videoModels } = useModels({ type: 'video' })
@@ -416,11 +446,13 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
     const modelId = selectedModel || initialMeta.modelId || ''
     if (modelId.includes('seedance-2-5')) return 30
     if (modelId.includes('seedance-2-0-fast')) return 10
-    if (modelId.includes('seedance-1-0-pro-fast')) return 5
-    if (modelId.includes('seedance-1-0-pro')) return 10
-    if (modelId.includes('cogvideo')) return 6
+    if (modelId.includes('seedance-2-0')) return 15
     return 15
   }, [selectedModel, initialMeta.modelId])
+  const referenceLimits = useMemo(
+    () => getReferenceLimits(selectedModel || initialMeta.modelId || ''),
+    [selectedModel, initialMeta.modelId],
+  )
   const durationOptions = useMemo(() => {
     const base = [4, 5, 6, 8, 10, 12, 15, 20, 25, 30]
     return base.filter((seconds) => seconds <= selectedModelMaxDuration)
@@ -501,7 +533,7 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'doubao-seed-2-0-pro-260215',
+          model: 'doubao-seed-evolving',
           prompt,
           systemPrompt: `你是一个专业的AI视频提示词优化师。请将用户输入优化为一个高质量的视频生成提示词。要求:
 1. 如果输入是简短描述,扩展场景细节(运镜、光线、氛围、动作、速度感)
@@ -527,7 +559,7 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
   // ── @素材引用：收集已连接参考（含分镜表场景图/角色图）─────────────────────
   const getConnectedRefs = useCallback(() => {
     const state = useFlowStore.getState()
-    const results: Array<{ id: string; label: string; url: string; type: 'image' | 'video' }> = []
+    const results: Array<{ id: string; label: string; url: string; type: 'image' | 'video' | 'audio' }> = []
     const refEdges = state.edges.filter((e) => e.target === id && (e.targetHandle === TAB_HANDLES.ref || e.targetHandle === TAB_HANDLES.firstlast || e.targetHandle === PROMPT_HANDLE))
     for (const e of refEdges) {
       const src = state.nodes.find((n) => n.id === e.source)
@@ -543,9 +575,14 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
         })
       } else {
         const d = src.data as CustomNodeData
-        const url = (d.imageUrl || d.videoUrl) as string | undefined
+        const url = (d.imageUrl || d.videoUrl || d.audioUrl) as string | undefined
         if (!url) continue
-        results.push({ id: src.id, label: d.label, url, type: d.imageUrl ? 'image' as const : 'video' as const })
+        results.push({
+          id: src.id,
+          label: d.label,
+          url,
+          type: d.imageUrl ? 'image' : d.videoUrl ? 'video' : 'audio',
+        })
       }
     }
     return results
@@ -693,9 +730,12 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
   }
 
   const handleAddRef = (refType: NodeType) => {
-    if (refCount >= MAX_REF) return
+    const mediaType = refType === 'video' ? 'video' : refType === 'audio' ? 'audio' : 'image'
+    const currentTypeCount = referenceNodeCounts[mediaType]
+    if (refCount >= referenceLimits.total || currentTypeCount >= referenceLimits[mediaType]) return
     const typeLabel: Record<NodeType, string> = {
       image: '参考图',
+      imageLayer: '参考分层图',
       video: '参考视频',
       audio: '参考音频',
       text: '参考文本',
@@ -863,7 +903,7 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
       }
 
       // 收集全能参考模式的 @素材引用 + 分镜表自动引用
-      let references: Array<{ label: string; url: string; type: 'image' | 'video' }> | undefined
+      let references: Array<{ label: string; url: string; type: 'image' | 'video' | 'audio' }> | undefined
       if (storyboardRowAssets && storyboardRowAssets.namedAssets.length > 0) {
         const withImages = storyboardRowAssets.namedAssets.filter((a) => a.url)
         const assetByName = new Map(withImages.map((a) => [a.name, a]))
@@ -877,12 +917,16 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
 
         const pool = mentionedInOrder.length > 0 ? mentionedInOrder : withImages
         if (pool.length > 0) {
-          references = pool.map((a) => ({ label: a.name, url: a.url!, type: 'image' as const }))
+          references = pool
+            .slice(0, referenceLimits.total)
+            .map((a) => ({ label: a.name, url: a.url!, type: 'image' as const }))
         }
       } else {
         const connectedRefs = getConnectedRefs()
         if (connectedRefs.length > 0) {
-          references = connectedRefs.map((r) => ({ label: r.label, url: r.url, type: r.type }))
+          references = connectedRefs
+            .slice(0, referenceLimits.total)
+            .map((r) => ({ label: r.label, url: r.url, type: r.type }))
         }
       }
 
@@ -995,31 +1039,37 @@ function VideoToolNode({ id, data, selected }: VideoNodeProps) {
           {tab === 'ref' && (
             <div className="flex items-center gap-2 rounded-lg border-2 border-border/30 bg-muted/20 px-2.5 py-1.5">
               <span className="text-[12px] text-muted-foreground">
-                已连接 <span className="font-semibold text-foreground">{refCount}</span> / {MAX_REF} 个参考
+                已连接 <span className="font-semibold text-foreground">{refCount}</span> / {referenceLimits.total} 个参考
+                <span className="ml-1.5 text-[10px] text-muted-foreground/70">
+                  图 {referenceNodeCounts.image}/{referenceLimits.image} · 视频 {referenceNodeCounts.video}/{referenceLimits.video} · 音频 {referenceNodeCounts.audio}/{referenceLimits.audio}
+                </span>
               </span>
               <div className="flex-1" />
-              {refCount < MAX_REF ? (
+              {refCount < referenceLimits.total ? (
                 <div className="flex gap-1">
                   <button
+                    disabled={referenceNodeCounts.image >= referenceLimits.image}
                     onPointerDown={(e) => e.stopPropagation()}
                     onClick={() => handleAddRef('image')}
-                    className="flex items-center gap-1 rounded-md bg-blue-500/10 px-1.5 py-0.5 text-[12px] font-medium text-blue-400 transition-colors hover:bg-blue-500/20"
+                    className="flex items-center gap-1 rounded-md bg-blue-500/10 px-1.5 py-0.5 text-[12px] font-medium text-blue-400 transition-colors hover:bg-blue-500/20 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-blue-500/10"
                   >
                     <ImageIcon className="size-2.5" />
                     图片
                   </button>
                   <button
+                    disabled={referenceNodeCounts.video >= referenceLimits.video}
                     onPointerDown={(e) => e.stopPropagation()}
                     onClick={() => handleAddRef('video')}
-                    className="flex items-center gap-1 rounded-md bg-violet-500/10 px-1.5 py-0.5 text-[12px] font-medium text-violet-400 transition-colors hover:bg-violet-500/20"
+                    className="flex items-center gap-1 rounded-md bg-violet-500/10 px-1.5 py-0.5 text-[12px] font-medium text-violet-400 transition-colors hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-violet-500/10"
                   >
                     <Video className="size-2.5" />
                     视频
                   </button>
                   <button
+                    disabled={referenceNodeCounts.audio >= referenceLimits.audio}
                     onPointerDown={(e) => e.stopPropagation()}
                     onClick={() => handleAddRef('audio')}
-                    className="flex items-center gap-1 rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[12px] font-medium text-emerald-400 transition-colors hover:bg-emerald-500/20"
+                    className="flex items-center gap-1 rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[12px] font-medium text-emerald-400 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-emerald-500/10"
                   >
                     <Music className="size-2.5" />
                     音频

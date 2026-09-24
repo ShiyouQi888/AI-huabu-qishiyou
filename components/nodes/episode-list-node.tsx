@@ -11,6 +11,7 @@ import { useModels } from '@/hooks/use-models'
 import { buildEpisodeRewritePrompt, buildEpisodeScriptPrompt, buildEpisodeStoryboardPrompt } from './script-node-prompts'
 import { CopyButton } from '@/components/copy-button'
 import { parseDurationSeconds, retimeStoryboardProfessionally } from '@/lib/storyboard-timing'
+import { buildContinuitySummary } from '@/lib/drama-world-state'
 
 interface EpisodeRow {
   ep: number
@@ -24,6 +25,8 @@ interface EpisodeRow {
   productionNotes?: string[]
   status: string
   storyboardNodeId: string | null
+  /** One-level undo: the script this replaced, so a bad rewrite/edit can be restored. */
+  previousScript?: string
 }
 
 interface ListContent {
@@ -35,6 +38,10 @@ interface ListContent {
   locations: string[]
   assetRefs: { chars: Record<string, string>; locs: Record<string, string>; props: Record<string, string> }
   episodes: EpisodeRow[]
+  /** Carried forward from the story bible — see lib/drama-world-state.ts. */
+  mustKeep?: string[]
+  taboo?: string[]
+  coreConflict?: string
 }
 
 type EpisodeListNodeProps = NodeProps<Node<CustomNodeData>>
@@ -44,6 +51,8 @@ function EpisodeListNode({ id, data, selected }: EpisodeListNodeProps) {
   const deleteNode = useFlowStore((s) => s.deleteNode)
   const createEpisodeStoryboard = useFlowStore((s) => s.createEpisodeStoryboard)
   const allNodes = useFlowStore((s) => s.nodes)
+  const allNodesRef = useRef(allNodes)
+  allNodesRef.current = allNodes
 
   const { models: textModels } = useModels({ type: 'text' })
   const [selectedModel, setSelectedModel] = useState('')
@@ -54,14 +63,35 @@ function EpisodeListNode({ id, data, selected }: EpisodeListNodeProps) {
   const content = useMemo<ListContent | null>(() => {
     try { return JSON.parse(data.content as string) } catch { return null }
   }, [data.content])
+  // "Latest ref" pattern: generateAllEpisodes is a long-running async loop that must see
+  // each round's freshly-completed episodes, not the content/allNodes snapshot from the
+  // render that kicked it off — refs updated every render give it a live read.
+  const contentRef = useRef(content)
+  contentRef.current = content
 
   // Per-episode transient state (persistent 'done' lives in node content)
   const [genState, setGenState] = useState<Record<number, 'generating' | 'scripting' | 'rewriting' | 'pilot' | 'error'>>({})
   const [errorMsg, setErrorMsg] = useState<Record<number, string>>({})
   const [editingScript, setEditingScript] = useState<number | null>(null)
   const [scriptDraft, setScriptDraft] = useState('')
+  const [isBatchGenerating, setIsBatchGenerating] = useState(false)
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null)
+  const [batchError, setBatchError] = useState<string | null>(null)
+  const batchStopRef = useRef(false)
   const [isPilotGenerating, setIsPilotGenerating] = useState(false)
   const abortRefs = useRef<Record<number, AbortController>>({})
+  // See script-node.tsx: switching projects unmounts nodes mid-generation without
+  // aborting their in-flight fetches. Abort every in-flight per-episode request on
+  // unmount so they don't keep running for a node that no longer exists in the store.
+  useEffect(() => () => {
+    batchStopRef.current = true
+    Object.values(abortRefs.current).forEach((c) => c.abort())
+  }, [])
+  // Populated below (after generateEpisodeScript/generateEpisode are defined) with a plain
+  // assignment, not a hook call — declared here, before the early return, so the useRef
+  // call itself always runs in the same order regardless of whether content parses.
+  const generateEpisodeScriptRef = useRef<((index: number, state?: 'scripting' | 'pilot') => Promise<void>) | null>(null)
+  const generateEpisodeRef = useRef<((index: number, state?: 'generating' | 'pilot', episodeOverride?: EpisodeRow) => Promise<void>) | null>(null)
 
   if (!content) return null
 
@@ -256,7 +286,7 @@ ${JSON.stringify(storyboard, null, 2)}
         characters: content.characters,
         locations: content.locations,
       })
-      const parsed = await callText(system, user, controller)
+      const parsed = await callText(system, user, controller, 16000)
       let storyboard = Array.isArray(parsed) ? parsed : Array.isArray(parsed.storyboard) ? parsed.storyboard : []
       if (storyboard.length === 0) throw new Error('分镜为空，请重试')
       storyboard = await ensureStoryboardDialogue(storyboard, ep, controller)
@@ -320,19 +350,28 @@ ${JSON.stringify(storyboard, null, 2)}
     abortRefs.current[index] = controller
 
     try {
+      const priorEpisodes = content.episodes
+        .filter((e) => e.ep < ep.ep && e.script)
+        .sort((a, b) => a.ep - b.ep)
+      const worldStateSummary = buildContinuitySummary(
+        { mustKeep: content.mustKeep, taboo: content.taboo, coreConflict: content.coreConflict },
+        priorEpisodes,
+      )
       const { system, user } = buildEpisodeScriptPrompt({
         title: content.title,
         episode: ep,
         episodeDuration: content.episodeDuration,
         characters: content.characters,
         locations: content.locations,
+        worldStateSummary,
       })
-      const parsed = await callText(system, user, controller, 9000)
+      const parsed = await callText(system, user, controller, 16000)
       const script = typeof parsed.script === 'string' ? parsed.script.trim() : ''
       if (!script) throw new Error('单集剧本为空，请重试')
       const nextEp: EpisodeRow = {
         ...ep,
         script,
+        previousScript: ep.script || undefined,
         dialogueHighlights: Array.isArray(parsed.dialogueHighlights) ? parsed.dialogueHighlights : [],
         productionNotes: Array.isArray(parsed.productionNotes) ? parsed.productionNotes : [],
         status: 'idle',
@@ -370,7 +409,7 @@ ${JSON.stringify(storyboard, null, 2)}
         episodeDuration: content.episodeDuration,
         template: content.template,
       })
-      const parsed = await callText(system, user, controller, 5000)
+      const parsed = await callText(system, user, controller, 8000)
       updateEpisode(index, {
         title: parsed.title ?? ep.title,
         hook: parsed.hook ?? ep.hook,
@@ -406,6 +445,7 @@ ${JSON.stringify(storyboard, null, 2)}
     const nextEp: EpisodeRow = {
       ...ep,
       script: scriptDraft,
+      previousScript: ep.script !== scriptDraft ? (ep.script || undefined) : ep.previousScript,
       status: 'idle',
       storyboardNodeId: null,
     }
@@ -413,6 +453,20 @@ ${JSON.stringify(storyboard, null, 2)}
     await generateEpisode(editingScript, 'generating', nextEp)
     setEditingScript(null)
     setScriptDraft('')
+  }
+
+  const restorePreviousScript = async (index: number) => {
+    const ep = content.episodes[index]
+    if (!ep?.previousScript) return
+    const nextEp: EpisodeRow = {
+      ...ep,
+      script: ep.previousScript,
+      previousScript: undefined,
+      status: 'idle',
+      storyboardNodeId: null,
+    }
+    updateEpisode(index, nextEp)
+    await generateEpisode(index, 'generating', nextEp)
   }
 
   const generatePilotPack = async () => {
@@ -429,6 +483,59 @@ ${JSON.stringify(storyboard, null, 2)}
       }
     } finally {
       setIsPilotGenerating(false)
+    }
+  }
+
+  // Always point at this render's freshest closures — see the "latest ref" comment above.
+  generateEpisodeScriptRef.current = generateEpisodeScript
+  generateEpisodeRef.current = generateEpisode
+
+  const isEpisodeRowDone = (e: EpisodeRow) =>
+    e.status === 'done' && !!e.storyboardNodeId && allNodesRef.current.some((n) => n.id === e.storyboardNodeId)
+
+  // Generates every not-yet-done episode: concurrency-limited, naturally resumable (each
+  // round re-scans the live node content for what's still pending), and stops itself after
+  // repeated consecutive failures instead of burning through the rest of the season on the
+  // same recurring error.
+  const generateAllEpisodes = async () => {
+    if (!selectedModel || isBatchGenerating) return
+    setIsBatchGenerating(true)
+    setBatchError(null)
+    batchStopRef.current = false
+
+    const CONCURRENCY = 2
+    const MAX_CONSECUTIVE_FAILURES = 3
+    let consecutiveFailures = 0
+
+    try {
+      while (!batchStopRef.current) {
+        const liveEpisodes = contentRef.current?.episodes ?? []
+        const pending = liveEpisodes
+          .map((_, i) => i)
+          .filter((i) => !isEpisodeRowDone(liveEpisodes[i]))
+        if (pending.length === 0) break
+
+        setBatchProgress({ done: liveEpisodes.length - pending.length, total: liveEpisodes.length })
+        const batch = pending.slice(0, CONCURRENCY)
+        const results = await Promise.allSettled(batch.map((i) => {
+          const ep = liveEpisodes[i]
+          return ep.script ? generateEpisodeRef.current?.(i) : generateEpisodeScriptRef.current?.(i)
+        }))
+
+        if (batchStopRef.current) break
+        if (results.every((r) => r.status === 'rejected')) {
+          consecutiveFailures++
+          if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            setBatchError(`连续 ${MAX_CONSECUTIVE_FAILURES} 次生成失败，已停止批量生成，请检查后重试`)
+            break
+          }
+        } else {
+          consecutiveFailures = 0
+        }
+      }
+    } finally {
+      setIsBatchGenerating(false)
+      setBatchProgress(null)
     }
   }
 
@@ -458,11 +565,20 @@ ${JSON.stringify(storyboard, null, 2)}
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={generatePilotPack}
-            disabled={!selectedModel || isPilotGenerating}
+            disabled={!selectedModel || isPilotGenerating || isBatchGenerating}
             className="flex items-center gap-1 rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-medium text-amber-500 transition-colors hover:bg-amber-500/20 disabled:opacity-40"
           >
             {isPilotGenerating ? <Loader2 className="size-3 animate-spin" /> : <Sparkles className="size-3" />}
             前3集试播
+          </button>
+          <button
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={isBatchGenerating ? () => { batchStopRef.current = true } : generateAllEpisodes}
+            disabled={!selectedModel || isPilotGenerating || (!isBatchGenerating && doneCount >= content.episodes.length)}
+            className="flex items-center gap-1 rounded-full bg-primary/15 px-2.5 py-1 text-[11px] font-medium text-primary transition-colors hover:bg-primary/20 disabled:opacity-40"
+          >
+            {isBatchGenerating ? <Loader2 className="size-3 animate-spin" /> : <Sparkles className="size-3" />}
+            {isBatchGenerating ? `停止（${batchProgress?.done ?? 0}/${batchProgress?.total ?? content.episodes.length}）` : '生成全部剧集'}
           </button>
           <div className="flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-500">
             <Check className="size-3" />
@@ -470,6 +586,13 @@ ${JSON.stringify(storyboard, null, 2)}
           </div>
         </div>
       </div>
+
+      {batchError && (
+        <div className="mt-2 flex items-center gap-1.5 rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-2 text-[11px] text-red-400">
+          <AlertCircle className="size-3.5 shrink-0" />
+          {batchError}
+        </div>
+      )}
 
       {/* Episode list — `nowheel` lets the wheel scroll this list instead of zooming the canvas */}
       <div className="nowheel mt-2.5 max-h-[560px] space-y-1.5 overflow-y-auto overscroll-contain pr-1">
@@ -519,6 +642,16 @@ ${JSON.stringify(storyboard, null, 2)}
                         <span className="text-[10px] font-medium text-foreground/60">单集剧本</span>
                         <div className="flex items-center gap-1">
                           <CopyButton text={ep.script} iconOnly title="复制单集剧本" className="size-5" />
+                          {ep.previousScript && (
+                            <button
+                              onPointerDown={(e) => e.stopPropagation()}
+                              onClick={() => restorePreviousScript(i)}
+                              title="恢复重写前的上一版剧本"
+                              className="text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+                            >
+                              恢复上一版
+                            </button>
+                          )}
                           <button
                             onPointerDown={(e) => e.stopPropagation()}
                             onClick={() => startScriptEdit(i, ep.script ?? '')}

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, ArrowRight, Eye, EyeOff, Check, AlertCircle } from 'lucide-react'
 
@@ -23,7 +23,12 @@ export default function ForgotPasswordPage() {
 
   const timerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
 
+  useEffect(() => () => {
+    if (timerRef.current) clearInterval(timerRef.current)
+  }, [])
+
   const startCooldown = () => {
+    if (timerRef.current) clearInterval(timerRef.current)
     setCooldown(60)
     timerRef.current = setInterval(() => {
       setCooldown((c) => {
@@ -34,17 +39,18 @@ export default function ForgotPasswordPage() {
   }
 
   const handleSendCode = useCallback(async () => {
-    if (!EMAIL_RE.test(email)) { setSendError('请输入正确的邮箱地址'); return }
+    const normalizedEmail = email.trim().toLowerCase()
+    if (!EMAIL_RE.test(normalizedEmail)) { setSendError('请输入正确的邮箱地址'); return }
     setSendLoading(true); setSendError('')
     try {
       const res = await fetch('/api/auth/send-code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, purpose: 'reset-password' }),
+        body: JSON.stringify({ email: normalizedEmail, purpose: 'reset-password' }),
       })
       const data = await res.json() as { error?: string }
       if (!res.ok) throw new Error(data.error ?? '发送失败')
-      setStep('reset'); startCooldown()
+      setEmail(normalizedEmail); setStep('reset'); startCooldown()
     } catch (e) {
       setSendError(e instanceof Error ? e.message : '发送失败')
     } finally {
@@ -54,6 +60,11 @@ export default function ForgotPasswordPage() {
 
   const mismatch = confirmPwd.length > 0 && newPwd !== confirmPwd
   const canSubmit = code.length === 6 && newPwd.length >= 6 && !mismatch
+
+  const handleEmailSubmit = (event: React.FormEvent) => {
+    event.preventDefault()
+    void handleSendCode()
+  }
 
   const handleReset = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -107,15 +118,17 @@ export default function ForgotPasswordPage() {
               <h1 className="text-[19px] font-bold tracking-tight text-[#1a1916]">重置密码</h1>
               <p className="mt-1 text-[12px] text-[#9a9690]">输入注册邮箱，获取验证码</p>
             </div>
-            <div className="space-y-3">
+            <form onSubmit={handleEmailSubmit} className="space-y-3">
               <div>
-                <label className="mb-1 block text-[10px] font-medium text-[#6e6b64]">注册邮箱</label>
+                <label htmlFor="forgot-email" className="mb-1 block text-[10px] font-medium text-[#6e6b64]">注册邮箱</label>
                 <input
+                  id="forgot-email"
                   type="email"
                   value={email}
                   onChange={(e) => { setEmail(e.target.value); setSendError('') }}
                   placeholder="请输入注册邮箱"
                   autoFocus
+                  autoComplete="email"
                   className="w-full rounded-xl border border-[#e0ddd6] bg-white px-3.5 py-2.5 text-[13px] text-[#1a1916] placeholder:text-[#c4c1b8] shadow-[0_1px_2px_rgba(0,0,0,0.04)] outline-none transition-all focus:border-[#1a1916] focus:shadow-[0_0_0_3px_rgba(26,25,22,0.08)]"
                 />
                 {sendError && (
@@ -125,7 +138,7 @@ export default function ForgotPasswordPage() {
                 )}
               </div>
               <button
-                onClick={handleSendCode}
+                type="submit"
                 disabled={sendLoading || !email}
                 className="group flex w-full items-center justify-center gap-1.5 rounded-xl bg-[#1a1916] py-2.5 text-[12px] font-semibold text-[#f5f4f0] shadow-[0_1px_2px_rgba(0,0,0,0.2)] transition-all hover:bg-[#2a2925] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-35"
               >
@@ -133,13 +146,22 @@ export default function ForgotPasswordPage() {
                   ? <div className="size-3.5 animate-spin rounded-full border-2 border-[#f5f4f0]/25 border-t-[#f5f4f0]" />
                   : <>获取验证码 <ArrowRight className="size-3 transition-transform group-hover:translate-x-0.5" /></>}
               </button>
-            </div>
+            </form>
           </>
         ) : (
           <>
             <div className="mb-6">
               <h1 className="text-[19px] font-bold tracking-tight text-[#1a1916]">设置新密码</h1>
-              <p className="mt-1 text-[12px] text-[#9a9690]">验证码已发送至 {email}</p>
+              <div className="mt-1 flex items-center gap-2 text-[12px] text-[#9a9690]">
+                <span className="min-w-0 truncate">验证码已发送至 {email}</span>
+                <button
+                  type="button"
+                  onClick={() => { setStep('email'); setCode(''); setError('') }}
+                  className="shrink-0 font-medium text-[#6e6b64] underline decoration-[#c4c1b8] underline-offset-2 transition-colors hover:text-[#1a1916]"
+                >
+                  修改邮箱
+                </button>
+              </div>
             </div>
             <form onSubmit={handleReset} className="space-y-3">
               {error && (
@@ -149,7 +171,7 @@ export default function ForgotPasswordPage() {
               )}
               <div>
                 <div className="mb-1 flex items-center justify-between">
-                  <label className="text-[10px] font-medium text-[#6e6b64]">验证码</label>
+                  <label htmlFor="reset-code" className="text-[10px] font-medium text-[#6e6b64]">验证码</label>
                   <button
                     type="button"
                     onClick={handleSendCode}
@@ -160,6 +182,7 @@ export default function ForgotPasswordPage() {
                   </button>
                 </div>
                 <input
+                  id="reset-code"
                   type="text"
                   inputMode="numeric"
                   pattern="[0-9]*"
@@ -172,9 +195,10 @@ export default function ForgotPasswordPage() {
                 />
               </div>
               <div>
-                <label className="mb-1 block text-[10px] font-medium text-[#6e6b64]">新密码</label>
+                <label htmlFor="reset-password" className="mb-1 block text-[10px] font-medium text-[#6e6b64]">新密码</label>
                 <div className="relative">
                   <input
+                    id="reset-password"
                     type={showPwd ? 'text' : 'password'}
                     value={newPwd}
                     onChange={(e) => { setNewPwd(e.target.value); setError('') }}
@@ -182,15 +206,16 @@ export default function ForgotPasswordPage() {
                     autoComplete="new-password"
                     className="w-full rounded-xl border border-[#e0ddd6] bg-white px-3.5 py-2.5 pr-10 text-[13px] text-[#1a1916] placeholder:text-[#c4c1b8] shadow-[0_1px_2px_rgba(0,0,0,0.04)] outline-none transition-all focus:border-[#1a1916] focus:shadow-[0_0_0_3px_rgba(26,25,22,0.08)]"
                   />
-                  <button type="button" onClick={() => setShowPwd(!showPwd)} tabIndex={-1}
+                  <button type="button" onClick={() => setShowPwd(!showPwd)} aria-label={showPwd ? '隐藏密码' : '显示密码'}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-[#b8b5ae] transition-colors hover:text-[#6e6b64]">
                     {showPwd ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
                   </button>
                 </div>
               </div>
               <div>
-                <label className="mb-1 block text-[10px] font-medium text-[#6e6b64]">确认新密码</label>
+                <label htmlFor="reset-password-confirm" className="mb-1 block text-[10px] font-medium text-[#6e6b64]">确认新密码</label>
                 <input
+                  id="reset-password-confirm"
                   type="password"
                   value={confirmPwd}
                   onChange={(e) => setConfirmPwd(e.target.value)}

@@ -52,12 +52,13 @@
 
 | 服务商 | 能力示例 |
 | --- | --- |
-| **OpenAI** | GPT-4o · DALL·E 3 · o4-mini |
+| **OpenAI** | GPT-5.6 Sol / Terra / Luna · GPT Image 2 |
 | **DeepSeek** | DeepSeek V4 Pro / Flash |
-| **通义千问 / 万相**（阿里 DashScope） | Qwen3 · 通义万相 2.1 · CosyVoice 2 |
-| **Kimi**（Moonshot） | moonshot-v1 系列 |
-| **火山引擎 · 即梦**（字节 Ark） | Seedance 2.0 · Seedream 4.5 |
-| **智谱 GLM** | GLM-4 · CogView-4 · CogVideoX |
+| **通义千问 / 万相**（阿里 DashScope） | Qwen3.8 / 3.7 · CosyVoice V3.5 |
+| **Kimi**（Moonshot） | kimi-k3 / kimi-k2.7 系列 |
+| **火山引擎 · 即梦 / 豆包语音** | Seedance 2.0 · Seedream 5 · 语音合成 2.0 |
+| **智谱 GLM** | GLM-5 · CogView-4 |
+| **Suno** | Suno V6 歌曲生成 |
 
 > 只需配置**至少一个**服务商的 API Key 即可开始使用。
 
@@ -98,7 +99,7 @@ npm run dev
 | `DEEPSEEK_API_KEY` / `OPENAI_API_KEY` / `DASHSCOPE_API_KEY` / `MOONSHOT_API_KEY` / `ARK_API_KEY` / `ZHIPU_API_KEY` | 各服务商 API Key | 至少一个 |
 | `JWT_SECRET` | 登录令牌签名密钥（**生产环境务必修改为随机长字符串**） | ✅ |
 | `NEXT_PUBLIC_MAX_UPLOAD_SIZE` | 上传大小上限（字节，默认 100MB） | — |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` | 注册邮箱验证码（不配置则注册免验证码） | — |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` | 注册验证、修改邮箱与找回密码邮件（找回密码必须配置） | — |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `NEXTAUTH_URL` | Google OAuth 登录 | — |
 
 ---

@@ -23,6 +23,10 @@ interface UseModelsOptions {
 let globalCache: Record<string, { models: ModelOption[]; ts: number }> = {}
 const CACHE_TTL = 5 * 60 * 1000
 
+export function invalidateModelsCache() {
+  globalCache = {}
+}
+
 export function useModels(opts: UseModelsOptions = {}) {
   const [models, setModels] = useState<ModelOption[]>([])
   const [loading, setLoading] = useState(true)
@@ -31,13 +35,6 @@ export function useModels(opts: UseModelsOptions = {}) {
   const key = opts.type ?? '__all__'
 
   useEffect(() => {
-    const cached = globalCache[key]
-    if (cached && Date.now() - cached.ts < CACHE_TTL) {
-      setModels(cached.models)
-      setLoading(false)
-      return
-    }
-
     let cancelled = false
 
     const fetchModels = async () => {
@@ -66,8 +63,25 @@ export function useModels(opts: UseModelsOptions = {}) {
       }
     }
 
+    const refresh = () => {
+      invalidateModelsCache()
+      setLoading(true)
+      void fetchModels()
+    }
+    window.addEventListener('ai-config-updated', refresh)
+
+    const cached = globalCache[key]
+    if (cached && Date.now() - cached.ts < CACHE_TTL) {
+      setModels(cached.models)
+      setLoading(false)
+      return () => window.removeEventListener('ai-config-updated', refresh)
+    }
+
     fetchModels()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      window.removeEventListener('ai-config-updated', refresh)
+    }
   }, [key, opts.type])
 
   return { models, loading, error }

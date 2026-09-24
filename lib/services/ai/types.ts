@@ -39,6 +39,24 @@ export interface ImageGenRequest {
   referenceImage?: string
   /** 风格参考 */
   styleReference?: string
+  referenceImages?: string[]
+  interactiveEdit?: boolean
+  annotations?: Array<{ type: 'point' | 'bbox'; imageIndex?: number; x?: number; y?: number; x1?: number; y1?: number; x2?: number; y2?: number; prompt?: string }>
+  layerDecomposition?: boolean
+}
+
+export interface ImageLayerResult {
+  url: string
+  name?: string
+  description?: string
+  zIndex?: number
+  boundingBox?: { absolute?: number[]; normalized?: number[] }
+}
+
+export interface ImageGenResponse {
+  imageUrl: string
+  imageUrls?: string[]
+  layers?: ImageLayerResult[]
 }
 
 /** 视频生成请求 */
@@ -56,7 +74,7 @@ export interface VideoGenRequest {
   /** 参考视频 URL */
   referenceVideo?: string
   /** 全能参考模式：内联素材引用（@label 标记对应的素材 URL） */
-  references?: Array<{ label: string; url: string; type?: 'image' | 'video' }>
+  references?: Array<{ label: string; url: string; type?: 'image' | 'video' | 'audio' }>
 }
 
 /** 视频生成响应 */
@@ -86,6 +104,23 @@ export interface AudioGenResponse {
   status: TaskStatus
   audioUrl?: string
   duration?: number
+  provider?: string
+}
+
+export interface SongGenRequest {
+  model: string
+  prompt: string
+  lyrics?: string
+  title?: string
+  style?: string
+  instrumental?: boolean
+}
+
+export interface SongGenResponse extends AudioGenResponse {
+  songId?: string
+  title?: string
+  lyrics?: string
+  coverUrl?: string
 }
 
 /** 模型信息 */

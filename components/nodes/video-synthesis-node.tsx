@@ -33,7 +33,7 @@ function VideoSynthesisNode({ id, data, selected }: VideoSynthesisNodeProps) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'doubao-seed-2-0-pro-260215',
+          model: 'doubao-seed-evolving',
           prompt,
           systemPrompt: `你是一个专业的AI视频提示词优化师。请将用户输入优化为一个高质量的视频生成提示词。要求:
 1. 如果输入是简短描述,扩展场景细节(运镜、光线、氛围、动作、速度感)

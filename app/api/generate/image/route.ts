@@ -41,7 +41,7 @@ export async function POST(request: Request) {
   try {
     const body = await request.json() as {
       model: string
-      prompt: string
+      prompt?: string
       negativePrompt?: string
       ratio?: string
       width?: number
@@ -49,9 +49,13 @@ export async function POST(request: Request) {
       count?: number
       referenceImage?: string
       styleReference?: string
+      referenceImages?: string[]
+      interactiveEdit?: boolean
+      annotations?: Array<{ type: 'point' | 'bbox'; imageIndex?: number; x?: number; y?: number; x1?: number; y1?: number; x2?: number; y2?: number; prompt?: string }>
+      layerDecomposition?: boolean
     }
 
-    if (!body.model || !body.prompt) {
+    if (!body.model || (!body.prompt && !body.layerDecomposition)) {
       return NextResponse.json({ error: '缺少必填参数 model / prompt' }, { status: 400 })
     }
 
@@ -66,21 +70,31 @@ export async function POST(request: Request) {
 
     const result = await generateImage({
       model: body.model,
-      prompt: body.prompt,
+      prompt: body.prompt || '自动识别主要元素并拆分为可编辑图层',
       negativePrompt: body.negativePrompt,
       width,
       height,
       count: body.count,
       referenceImage: body.referenceImage,
       styleReference: body.styleReference,
+      referenceImages: body.referenceImages,
+      interactiveEdit: body.interactiveEdit,
+      annotations: body.annotations,
+      layerDecomposition: body.layerDecomposition,
     })
 
-    if (result.imageUrl && !result.imageUrl.startsWith('/uploads/') && !result.imageUrl.startsWith('data:')) {
-      try {
-        result.imageUrl = await downloadToLocal(result.imageUrl, 'image')
-      } catch (e) {
+    const urls = result.imageUrls?.length ? result.imageUrls : [result.imageUrl]
+    const localUrls = await Promise.all(urls.map(async (url) => {
+      if (url.startsWith('/uploads/') || url.startsWith('data:')) return url
+      try { return await downloadToLocal(url, 'image') } catch (e) {
         console.error('[图片落库] 下载失败，返回原始URL:', e)
+        return url
       }
+    }))
+    result.imageUrl = localUrls[0]
+    result.imageUrls = localUrls
+    if (result.layers?.length) {
+      result.layers = result.layers.map((layer, index) => ({ ...layer, url: localUrls[index + 1] || layer.url }))
     }
 
     return NextResponse.json(result)

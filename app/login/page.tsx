@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Eye, EyeOff, Sparkles, Layers, PenTool, ArrowRight, AlertCircle } from 'lucide-react'
 import { CaptchaDialog } from '@/components/captcha-slider'
+import { LoginMatrixBackground } from '@/components/login-matrix-background'
 import { initStoreForUser } from '@/lib/project-store'
 
 const FEATURES = [
@@ -37,7 +38,7 @@ function BrandIcon({ onDark }: { onDark?: boolean }) {
 function LeftPanel() {
   return (
     <div className="relative hidden lg:flex lg:w-[42%] lg:flex-col lg:justify-between lg:p-10 overflow-hidden shrink-0">
-      <div className="absolute inset-0 bg-[#131211]" />
+      <div className="absolute inset-0 bg-[#131211]/90" />
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_75%_65%_at_18%_55%,rgba(255,248,220,0.05),transparent)]" />
       <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.009)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.009)_1px,transparent_1px)] bg-[size:56px_56px]" />
 
@@ -214,6 +215,7 @@ function LoginForm() {
 export default function LoginPage() {
   return (
     <div className="relative flex min-h-screen items-center justify-center bg-[#f5f4f0] p-4 lg:bg-[#0d0c0a] lg:p-10">
+      <LoginMatrixBackground />
       <div className="pointer-events-none absolute inset-0 hidden lg:block bg-[radial-gradient(ellipse_50%_50%_at_50%_50%,rgba(255,250,230,0.03),transparent)]" />
       <div className="relative z-10 flex w-full min-h-screen flex-col overflow-hidden lg:min-h-0 lg:max-w-[900px] lg:flex-row lg:rounded-2xl lg:border lg:border-white/[0.07] lg:shadow-[0_20px_70px_rgba(0,0,0,0.6)]">
         <LeftPanel />

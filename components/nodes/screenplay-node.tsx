@@ -7,7 +7,10 @@ import { cn } from '@/lib/utils'
 import { CustomNodeData, useFlowStore } from '@/lib/store'
 import { NodeBase } from './node-base'
 import { useModels } from '@/hooks/use-models'
-import { buildDramaAssetExtractionPrompt, buildDramaQualityReviewPrompt, buildDramaRewriteByQualityPrompt } from './script-node-prompts'
+import {
+  DRAMA_BATCH_SIZE, buildDramaAssetExtractionPrompt, buildDramaQualityReviewPrompt, buildDramaRewriteByQualityPrompt,
+  buildGenericQualityReviewPrompt, buildGenericRewriteByQualityPrompt, CONTENT_TYPE_LABELS, ContentType,
+} from './script-node-prompts'
 import { CopyButton } from '@/components/copy-button'
 
 interface ScreenplayContent {
@@ -48,6 +51,27 @@ const cleanFileName = (name: string) =>
 const listMarkdown = (items?: string[]) => {
   if (!items?.length) return ''
   return items.map((item) => `- ${item}`).join('\n')
+}
+
+/** 将长剧本按段落切成可独立分析的批次，避免一次请求同时压爆上下文和输出预算。 */
+const splitLongScript = (text: string, maxChars = 14000) => {
+  const paragraphs = text.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean)
+  const chunks: string[] = []
+  let current = ''
+  for (const paragraph of paragraphs) {
+    if (paragraph.length > maxChars) {
+      if (current) { chunks.push(current); current = '' }
+      for (let i = 0; i < paragraph.length; i += maxChars) chunks.push(paragraph.slice(i, i + maxChars))
+      continue
+    }
+    if (current && current.length + paragraph.length + 2 > maxChars) {
+      chunks.push(current)
+      current = ''
+    }
+    current = current ? `${current}\n\n${paragraph}` : paragraph
+  }
+  if (current) chunks.push(current)
+  return chunks.length ? chunks : [text]
 }
 
 const screenplayToMarkdown = (screenplay: ScreenplayContent) => {
@@ -215,6 +239,10 @@ function ScreenplayNode({ id, data, selected }: ScreenplayNodeProps) {
   const [extractError, setExtractError] = useState<string | null>(null)
   const [rewriteError, setRewriteError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  // See script-node.tsx: switching projects unmounts nodes mid-generation without
+  // aborting their in-flight fetch. Abort on unmount so the request doesn't keep
+  // running for a node that no longer exists in the store.
+  useEffect(() => () => abortRef.current?.abort(), [])
 
   // Edit mode
   const [isEditing, setIsEditing] = useState(false)
@@ -427,7 +455,7 @@ function ScreenplayNode({ id, data, selected }: ScreenplayNodeProps) {
         const dres = await fetch('/api/generate/text', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: selectedModel, prompt: dp.user, systemPrompt: dp.system, temperature: 0.7, maxTokens: 6000 }),
+          body: JSON.stringify({ model: selectedModel, prompt: dp.user, systemPrompt: dp.system, temperature: 0.7, maxTokens: 12000 }),
           signal: controller.signal,
         })
         if (!dres.ok) {
@@ -453,48 +481,33 @@ function ScreenplayNode({ id, data, selected }: ScreenplayNodeProps) {
         return
       }
 
-      const res = await fetch('/api/generate/text', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: selectedModel,
-          prompt: `【剧本标题】${screenplay.title}\n\n【故事概要】${screenplay.synopsis}\n\n【完整剧本】\n${screenplay.content}`,
+      const chunks = splitLongScript(screenplay.content)
+      const merged = { characters: [] as any[], locations: [] as any[], props: [] as any[], storyboard: [] as any[] }
+      for (let index = 0; index < chunks.length; index++) {
+        const part = chunks[index]
+        const partResult = await callTextJson(
           systemPrompt,
-          temperature: 0.7,
-          maxTokens: 8000,
-        }),
-        signal: controller.signal,
-      })
-
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => ({} as Record<string, string>))
-        throw new Error(errBody.error || `HTTP ${res.status}`)
+          `【剧本标题】${screenplay.title}\n\n【故事概要】${screenplay.synopsis}\n\n【长剧本分段分析】这是第 ${index + 1}/${chunks.length} 段。只分析本段中实际出现的角色、场景、道具和分镜，不要臆造未出现的内容。\n\n【本段剧本】\n${part}`,
+          controller,
+          12000,
+        )
+        const addUnique = (target: any[], items: unknown, key: string) => {
+          if (!Array.isArray(items)) return
+          for (const item of items) {
+            const name = String((item as Record<string, unknown>)?.[key] ?? '').trim()
+            const existing = name && target.find((value) => String(value?.[key] ?? '').trim() === name)
+            if (existing && typeof item === 'object') Object.assign(existing, item)
+            else if (typeof item === 'object') target.push(item)
+          }
+        }
+        addUnique(merged.characters, partResult.characters, 'name')
+        addUnique(merged.locations, partResult.locations, 'name')
+        addUnique(merged.props, partResult.props, 'name')
+        if (Array.isArray(partResult.storyboard)) merged.storyboard.push(...partResult.storyboard.map((shot: Record<string, unknown>) => ({ ...shot, shot: merged.storyboard.length + 1 })))
       }
 
-      const result = await res.json() as { text: string }
-      const text = result.text?.trim()
-      if (!text) throw new Error('提取结果为空')
-
-      const jsonMatch = text.match(/\{[\s\S]*\}/)
-      if (!jsonMatch) throw new Error('无法解析 JSON')
-
-      let jsonStr = jsonMatch[0]
-      jsonStr = jsonStr
-        .replace(/,\s*\]/g, ']')
-        .replace(/,\s*\}/g, '}')
-        .replace(/:\s*undefined/g, ': null')
-
-      let parsed: ReturnType<typeof JSON.parse>
-      try {
-        parsed = JSON.parse(jsonStr)
-      } catch (parseErr) {
-        console.error('JSON 解析失败，原始内容:', jsonStr.substring(0, 500))
-        throw new Error(`JSON 解析失败: ${parseErr instanceof Error ? parseErr.message : '未知错误'}`)
-      }
-
-      if (!parsed.characters || !parsed.storyboard) throw new Error('格式错误：缺少 characters 或 storyboard')
-
-      createAssetsFromExtraction(id, parsed)
+      if (!merged.characters.length && !merged.storyboard.length) throw new Error('长剧本分段分析没有返回有效内容')
+      createAssetsFromExtraction(id, merged)
       setAssetExtracted(true)
       updateNodeData(id, { status: 'completed' })
     } catch (err) {
@@ -512,7 +525,7 @@ function ScreenplayNode({ id, data, selected }: ScreenplayNodeProps) {
   }
 
   const handleRewriteByQuality = async () => {
-    if (!screenplay || !isDrama || isRewriting || !selectedModel) return
+    if (!screenplay || !screenplay.qualityReport || isRewriting || !selectedModel) return
     setIsRewriting(true)
     setRewriteError(null)
     updateNodeData(id, { status: 'generating' })
@@ -521,39 +534,103 @@ function ScreenplayNode({ id, data, selected }: ScreenplayNodeProps) {
     abortRef.current = controller
 
     try {
-      const rewritePrompt = buildDramaRewriteByQualityPrompt({
-        title: screenplay.title,
-        synopsis: screenplay.synopsis,
-        content: screenplay.content,
-        storyBible: screenplay.storyBible,
-        characters: screenplay.characters ?? [],
-        episodes: screenplay.episodes ?? [],
-        episodeDuration: screenplay.episodeDuration ?? 90,
-        template: screenplay.dramaTemplate,
-        qualityReport: screenplay.qualityReport,
-      })
-      const rewritten = await callTextJson(rewritePrompt.system, rewritePrompt.user, controller, 10000)
-      const nextEpisodes = Array.isArray(rewritten.episodes) ? rewritten.episodes : []
-      const expectedCount = screenplay.episodes?.length ?? 0
-      if (expectedCount > 0 && nextEpisodes.length !== expectedCount) {
-        throw new Error(`改稿集数不一致：需要${expectedCount}集，实际${nextEpisodes.length}集`)
+      if (!isDrama) {
+        // Single-shot content types: one rewrite call, one re-review call — no episode
+        // batching needed since there's only one piece, not a whole season.
+        const contentType = (screenplay.contentType as ContentType) || 'shortvideo'
+        const typeLabel = CONTENT_TYPE_LABELS[contentType] ?? screenplay.contentType ?? ''
+        const rewritePrompt = buildGenericRewriteByQualityPrompt({
+          contentType, typeLabel,
+          title: screenplay.title,
+          synopsis: screenplay.synopsis,
+          content: screenplay.content,
+          qualityReport: screenplay.qualityReport,
+        })
+        const rewritten = await callTextJson(rewritePrompt.system, rewritePrompt.user, controller, 16000)
+        if (!rewritten.title) throw new Error('改稿结果缺少标题字段')
+        const nextContent = typeof rewritten.content === 'string' ? rewritten.content : screenplay.content
+
+        const reviewPrompt = buildGenericQualityReviewPrompt({
+          contentType, typeLabel,
+          title: rewritten.title, synopsis: rewritten.synopsis || '', content: nextContent,
+        })
+        const nextQuality = await callTextJson(reviewPrompt.system, reviewPrompt.user, controller, 16000)
+
+        const prevScore = screenplay.qualityReport?.totalScore
+        const nextScore = nextQuality?.totalScore
+        if (typeof prevScore === 'number' && typeof nextScore === 'number' && nextScore <= prevScore) {
+          setRewriteError(`评分从 ${prevScore} 分变为 ${nextScore} 分，没有改善，已放弃本次改稿结果并保留原内容，可重试`)
+          updateNodeData(id, { status: 'ready' })
+          return
+        }
+
+        const updated: ScreenplayContent = {
+          ...screenplay,
+          title: rewritten.title,
+          synopsis: rewritten.synopsis ?? screenplay.synopsis,
+          content: nextContent,
+          qualityReport: nextQuality,
+        }
+        updateNodeData(id, { content: JSON.stringify(updated), status: 'ready' })
+        setAssetExtracted(false)
+        return
       }
-      const episodes = nextEpisodes.map((ep: ScreenplayEpisode, i: number) => ({ ...ep, ep: ep.ep ?? i + 1 }))
+
+      // Rewriting every episode in one call scales badly — a 20+ episode season can
+      // overrun any maxTokens budget before the model finishes (worse on reasoning
+      // models, which can burn the whole budget on thinking alone). Batch it the same
+      // way the initial outline generation already does.
+      const sourceEpisodes = screenplay.episodes ?? []
+      let episodes: ScreenplayEpisode[] = []
+      for (let from = 1; from <= sourceEpisodes.length; from += DRAMA_BATCH_SIZE) {
+        const to = Math.min(from + DRAMA_BATCH_SIZE - 1, sourceEpisodes.length)
+        const rewritePrompt = buildDramaRewriteByQualityPrompt({
+          title: screenplay.title,
+          synopsis: screenplay.synopsis,
+          content: screenplay.content,
+          storyBible: screenplay.storyBible,
+          characters: screenplay.characters ?? [],
+          episodes: sourceEpisodes,
+          episodeDuration: screenplay.episodeDuration ?? 90,
+          template: screenplay.dramaTemplate,
+          qualityReport: screenplay.qualityReport,
+          rewriteFrom: from,
+          rewriteTo: to,
+        })
+        const rewritten = await callTextJson(rewritePrompt.system, rewritePrompt.user, controller, 16000)
+        const batchEpisodes = Array.isArray(rewritten.episodes) ? rewritten.episodes : []
+        const expectedBatchCount = to - from + 1
+        if (batchEpisodes.length !== expectedBatchCount) {
+          throw new Error(`第${from}-${to}集改稿数量不一致：需要${expectedBatchCount}集，实际${batchEpisodes.length}集`)
+        }
+        episodes = [...episodes, ...batchEpisodes]
+      }
+      episodes = episodes.map((ep: ScreenplayEpisode, i: number) => ({ ...ep, ep: ep.ep ?? i + 1 }))
 
       const reviewPrompt = buildDramaQualityReviewPrompt({
         title: screenplay.title,
-        synopsis: rewritten.synopsis || screenplay.synopsis,
+        synopsis: screenplay.synopsis,
         storyBible: screenplay.storyBible,
         characters: screenplay.characters ?? [],
         episodes,
         episodeDuration: screenplay.episodeDuration ?? 90,
       })
-      const nextQuality = await callTextJson(reviewPrompt.system, reviewPrompt.user, controller, 8000)
+      const nextQuality = await callTextJson(reviewPrompt.system, reviewPrompt.user, controller, 16000)
+
+      // LLM rewrites aren't monotonic — a "fix" pass can lower the score just as easily
+      // as raise it (batched rewrites in particular can drift on cross-episode
+      // consistency). Don't silently apply a regression: the screenplay itself is still
+      // fine, so this isn't a "failed" state, just a discarded attempt.
+      const prevScore = screenplay.qualityReport?.totalScore
+      const nextScore = nextQuality?.totalScore
+      if (typeof prevScore === 'number' && typeof nextScore === 'number' && nextScore <= prevScore) {
+        setRewriteError(`评分从 ${prevScore} 分变为 ${nextScore} 分，没有改善，已放弃本次改稿结果并保留原内容，可重试`)
+        updateNodeData(id, { status: 'ready' })
+        return
+      }
 
       const updated: ScreenplayContent = {
         ...screenplay,
-        synopsis: rewritten.synopsis || screenplay.synopsis,
-        content: rewritten.content || screenplay.content,
         episodes,
         qualityReport: nextQuality,
       }
@@ -584,158 +661,191 @@ function ScreenplayNode({ id, data, selected }: ScreenplayNodeProps) {
       selected={selected}
       onDelete={() => deleteNode(id)}
       icon={<BookOpen className="size-3.5" />}
-      width="w-[500px]"
+      width="w-[920px]"
     >
-      {/* Title + synopsis */}
-      <div className="rounded-xl border border-primary/20 bg-primary/5 px-3.5 py-2.5">
-        {isEditing ? (
-          <div className="flex flex-col gap-2">
-            <input
-              onPointerDown={(e) => e.stopPropagation()}
-              value={editTitle}
-              onChange={(e) => setEditTitle(e.target.value)}
-              placeholder="剧本标题"
-              className="w-full rounded-lg border border-primary/30 bg-background/60 px-2.5 py-1.5 text-[13px] font-semibold text-foreground outline-none focus:border-primary/60"
-            />
-            <textarea
-              onPointerDown={(e) => e.stopPropagation()}
-              value={editSynopsis}
-              onChange={(e) => setEditSynopsis(e.target.value)}
-              placeholder="故事概要…"
-              rows={3}
-              className="w-full resize-none rounded-lg border border-border/40 bg-background/60 px-2.5 py-1.5 text-[12px] leading-relaxed text-muted-foreground outline-none focus:border-primary/40"
-            />
-          </div>
-        ) : (
-          <div className="flex items-start gap-2">
-            <div className="flex-1">
-              <div className="flex items-start gap-1.5">
-                <h3 className="min-w-0 flex-1 text-[13px] font-semibold text-foreground">{screenplay.title}</h3>
-                <CopyButton
-                  text={`${screenplay.title}\n\n${screenplay.synopsis}`}
-                  iconOnly
-                  title="复制标题和概要"
-                  className="-mt-0.5"
+      {/* ── Two columns: metadata (title/bible/quality) | full screenplay content ── */}
+      <div className="flex items-start gap-3">
+        {/* ── Left: title/synopsis, story bible, quality report, errors ── */}
+        <div className="w-[320px] shrink-0 space-y-2.5">
+          <div className="rounded-xl border border-primary/20 bg-primary/5 px-3.5 py-2.5">
+            {isEditing ? (
+              <div className="flex flex-col gap-2">
+                <input
+                  onPointerDown={(e) => e.stopPropagation()}
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  placeholder="剧本标题"
+                  className="w-full rounded-lg border border-primary/30 bg-background/60 px-2.5 py-1.5 text-[13px] font-semibold text-foreground outline-none focus:border-primary/60"
+                />
+                <textarea
+                  onPointerDown={(e) => e.stopPropagation()}
+                  value={editSynopsis}
+                  onChange={(e) => setEditSynopsis(e.target.value)}
+                  placeholder="故事概要…"
+                  rows={3}
+                  className="w-full resize-none rounded-lg border border-border/40 bg-background/60 px-2.5 py-1.5 text-[12px] leading-relaxed text-muted-foreground outline-none focus:border-primary/40"
                 />
               </div>
-              {screenplay.synopsis && (
-                <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">{screenplay.synopsis}</p>
+            ) : (
+              <div className="flex items-start gap-2">
+                <div className="flex-1">
+                  <div className="flex items-start gap-1.5">
+                    <h3 className="min-w-0 flex-1 text-[13px] font-semibold text-foreground">{screenplay.title}</h3>
+                    <CopyButton
+                      text={`${screenplay.title}\n\n${screenplay.synopsis}`}
+                      iconOnly
+                      title="复制标题和概要"
+                      className="-mt-0.5"
+                    />
+                  </div>
+                  {screenplay.synopsis && (
+                    <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">{screenplay.synopsis}</p>
+                  )}
+                  {screenplay.scriptDuration && (
+                    <div className="mt-2 text-[11px] text-amber-600">⏱ 时长：{screenplay.scriptDuration}</div>
+                  )}
+                  {screenplay.qualityReport?.totalScore !== undefined && (
+                    <div className="mt-2 inline-flex rounded-full bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-500">
+                      编剧质检 {screenplay.qualityReport.totalScore}/100
+                    </div>
+                  )}
+                </div>
+                <button
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={startEdit}
+                  title="编辑剧本"
+                  className="mt-0.5 shrink-0 rounded-md p-1 text-muted-foreground/40 transition-colors hover:bg-muted/40 hover:text-foreground/70"
+                >
+                  <Pencil className="size-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {isDrama && screenplay.storyBible && (
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[12px] font-semibold text-amber-500">故事圣经</div>
+                <CopyButton text={storyBibleText} iconOnly title="复制故事圣经" className="text-amber-500/70 hover:bg-amber-500/10" />
+              </div>
+              <div className="mt-2 space-y-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                {screenplay.storyBible.logline && <p><span className="text-foreground/70">卖点：</span>{screenplay.storyBible.logline}</p>}
+                {screenplay.storyBible.coreConflict && <p><span className="text-foreground/70">核心矛盾：</span>{screenplay.storyBible.coreConflict}</p>}
+                {screenplay.storyBible.emotionalPromise && <p><span className="text-foreground/70">情绪承诺：</span>{screenplay.storyBible.emotionalPromise}</p>}
+                {screenplay.storyBible.visualStyle && <p><span className="text-foreground/70">视觉方向：</span>{screenplay.storyBible.visualStyle}</p>}
+              </div>
+            </div>
+          )}
+
+          {screenplay.qualityReport && (
+            <div className="rounded-xl border border-border/30 bg-muted/10 px-3 py-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[12px] font-semibold text-foreground/85">编剧质检</span>
+                <div className="flex items-center gap-1.5">
+                  <CopyButton text={qualityReportText} iconOnly title="复制质检报告" />
+                  {screenplay.qualityReport.totalScore !== undefined && (
+                    <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
+                      {screenplay.qualityReport.totalScore}/100
+                    </span>
+                  )}
+                  <button
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={handleRewriteByQuality}
+                    disabled={isRewriting || isExtracting || !selectedModel}
+                    className="flex items-center gap-1 rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-medium text-amber-500 transition-colors hover:bg-amber-500/20 disabled:opacity-40"
+                  >
+                    {isRewriting ? <Loader2 className="size-3 animate-spin" /> : <Sparkles className="size-3" />}
+                    {isRewriting ? '改稿中' : '按建议改稿'}
+                  </button>
+                </div>
+              </div>
+              {screenplay.qualityReport.verdict && (
+                <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">{screenplay.qualityReport.verdict}</p>
               )}
-              {screenplay.scriptDuration && (
-                <div className="mt-2 text-[11px] text-amber-600">⏱ 时长：{screenplay.scriptDuration}</div>
-              )}
-              {screenplay.qualityReport?.totalScore !== undefined && (
-                <div className="mt-2 inline-flex rounded-full bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-500">
-                  编剧质检 {screenplay.qualityReport.totalScore}/100
+              {screenplay.qualityReport.rewriteSuggestions && screenplay.qualityReport.rewriteSuggestions.length > 0 && (
+                <div className="mt-2 space-y-1 text-[11px] leading-relaxed text-muted-foreground">
+                  {screenplay.qualityReport.rewriteSuggestions.slice(0, 3).map((item, i) => (
+                    <p key={i}>• {item}</p>
+                  ))}
                 </div>
               )}
             </div>
-            <button
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={startEdit}
-              title="编辑剧本"
-              className="mt-0.5 shrink-0 rounded-md p-1 text-muted-foreground/40 transition-colors hover:bg-muted/40 hover:text-foreground/70"
-            >
-              <Pencil className="size-3.5" />
-            </button>
-          </div>
-        )}
-      </div>
-
-      {isDrama && screenplay.storyBible && (
-        <div className="mt-2.5 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2.5">
-          <div className="flex items-center justify-between gap-2">
-            <div className="text-[12px] font-semibold text-amber-500">故事圣经</div>
-            <CopyButton text={storyBibleText} iconOnly title="复制故事圣经" className="text-amber-500/70 hover:bg-amber-500/10" />
-          </div>
-          <div className="mt-2 space-y-1.5 text-[11px] leading-relaxed text-muted-foreground">
-            {screenplay.storyBible.logline && <p><span className="text-foreground/70">卖点：</span>{screenplay.storyBible.logline}</p>}
-            {screenplay.storyBible.coreConflict && <p><span className="text-foreground/70">核心矛盾：</span>{screenplay.storyBible.coreConflict}</p>}
-            {screenplay.storyBible.emotionalPromise && <p><span className="text-foreground/70">情绪承诺：</span>{screenplay.storyBible.emotionalPromise}</p>}
-            {screenplay.storyBible.visualStyle && <p><span className="text-foreground/70">视觉方向：</span>{screenplay.storyBible.visualStyle}</p>}
-          </div>
-        </div>
-      )}
-
-      {isDrama && screenplay.qualityReport && (
-        <div className="mt-2.5 rounded-xl border border-border/30 bg-muted/10 px-3 py-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-[12px] font-semibold text-foreground/85">编剧质检</span>
-            <div className="flex items-center gap-1.5">
-              <CopyButton text={qualityReportText} iconOnly title="复制质检报告" />
-              {screenplay.qualityReport.totalScore !== undefined && (
-                <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
-                  {screenplay.qualityReport.totalScore}/100
-                </span>
-              )}
-              <button
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={handleRewriteByQuality}
-                disabled={isRewriting || isExtracting || !selectedModel}
-                className="flex items-center gap-1 rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-medium text-amber-500 transition-colors hover:bg-amber-500/20 disabled:opacity-40"
-              >
-                {isRewriting ? <Loader2 className="size-3 animate-spin" /> : <Sparkles className="size-3" />}
-                {isRewriting ? '改稿中' : '按建议改稿'}
-              </button>
-            </div>
-          </div>
-          {screenplay.qualityReport.verdict && (
-            <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">{screenplay.qualityReport.verdict}</p>
           )}
-          {screenplay.qualityReport.rewriteSuggestions && screenplay.qualityReport.rewriteSuggestions.length > 0 && (
-            <div className="mt-2 space-y-1 text-[11px] leading-relaxed text-muted-foreground">
-              {screenplay.qualityReport.rewriteSuggestions.slice(0, 3).map((item, i) => (
-                <p key={i}>• {item}</p>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
 
-      {rewriteError && !isRewriting && (
-        <div className="mt-2.5 rounded-xl border border-red-500/20 bg-red-500/5 px-3.5 py-2.5">
-          <div className="flex items-center gap-1.5 text-[12px] text-red-400">
-            <AlertCircle className="size-3.5" />
-            <span>改稿失败：{rewriteError}</span>
-          </div>
-        </div>
-      )}
-
-      {/* Complete screenplay content */}
-      <div className="mt-2.5 rounded-xl border border-border/30 bg-muted/10 px-3 py-2.5">
-        {isEditing ? (
-          <textarea
-            onPointerDown={(e) => e.stopPropagation()}
-            value={editContent}
-            onChange={(e) => setEditContent(e.target.value)}
-            placeholder="完整剧本内容…"
-            className="min-h-[320px] w-full resize-y rounded-lg border border-border/40 bg-background/60 px-3 py-2.5 text-[12px] leading-relaxed text-foreground/80 outline-none focus:border-primary/40"
-          />
-        ) : (
-          <>
-            <div className="flex w-full items-center gap-1.5">
-              <button
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => setContentExpanded(!contentExpanded)}
-                className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-              >
-                <span className="text-[12px] font-medium text-foreground/80">完整剧本</span>
-                {contentExpanded
-                  ? <ChevronDown className="size-3 text-muted-foreground/40" />
-                  : <ChevronRight className="size-3 text-muted-foreground/40" />}
-              </button>
-              <div className="flex-1" />
-              <CopyButton text={screenplay.content} iconOnly title="复制完整剧本" />
-            </div>
-            {contentExpanded && (
-              <div className="mt-2.5 max-h-[400px] overflow-y-auto rounded-lg border border-border/20 bg-background/50 px-3 py-2.5">
-                <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-foreground/70">
-                  {screenplay.content}
-                </p>
+          {rewriteError && !isRewriting && (
+            <div className="rounded-xl border border-red-500/20 bg-red-500/5 px-3.5 py-2.5">
+              <div className="flex items-center gap-1.5 text-[12px] text-red-400">
+                <AlertCircle className="size-3.5" />
+                <span>改稿失败：{rewriteError}</span>
               </div>
-            )}
-          </>
-        )}
+            </div>
+          )}
+
+          {/* Extraction progress */}
+          {isExtracting && (
+            <div className="flex items-center justify-between gap-2 rounded-xl border border-primary/20 bg-primary/5 px-3.5 py-3">
+              <div className="flex items-center gap-2">
+                <Loader2 className="size-4 animate-spin text-primary" />
+                <span className="text-[12px] text-primary">{isDrama ? 'AI 正在提取全剧资产并生成剧集列表...' : 'AI 正在提取资产并规划分镜表...'}</span>
+              </div>
+              <button
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => abortRef.current?.abort()}
+                className="flex size-5 shrink-0 items-center justify-center rounded-full bg-red-500 transition-colors hover:bg-red-600"
+                title="中止"
+              >
+                <div className="size-1.5 rounded-sm bg-white" />
+              </button>
+            </div>
+          )}
+
+          {/* Extraction error */}
+          {extractError && !isExtracting && (
+            <div className="rounded-xl border border-red-500/20 bg-red-500/5 px-3.5 py-2.5">
+              <div className="flex items-center gap-1.5 text-[12px] text-red-400">
+                <AlertCircle className="size-3.5" />
+                <span>提取失败：{extractError}</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── Right: complete screenplay content ── */}
+        <div className="min-w-0 flex-1 rounded-xl border border-border/30 bg-muted/10 px-3 py-2.5">
+          {isEditing ? (
+            <textarea
+              onPointerDown={(e) => e.stopPropagation()}
+              value={editContent}
+              onChange={(e) => setEditContent(e.target.value)}
+              placeholder="完整剧本内容…"
+              className="min-h-[420px] w-full resize-y rounded-lg border border-border/40 bg-background/60 px-3 py-2.5 text-[12px] leading-relaxed text-foreground/80 outline-none focus:border-primary/40"
+            />
+          ) : (
+            <>
+              <div className="flex w-full items-center gap-1.5">
+                <button
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => setContentExpanded(!contentExpanded)}
+                  className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+                >
+                  <span className="text-[12px] font-medium text-foreground/80">完整剧本</span>
+                  {contentExpanded
+                    ? <ChevronDown className="size-3 text-muted-foreground/40" />
+                    : <ChevronRight className="size-3 text-muted-foreground/40" />}
+                </button>
+                <div className="flex-1" />
+                <CopyButton text={screenplay.content} iconOnly title="复制完整剧本" />
+              </div>
+              {contentExpanded && (
+                <div className="mt-2.5 max-h-[560px] overflow-y-auto rounded-lg border border-border/20 bg-background/50 px-3 py-2.5">
+                  <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-foreground/70">
+                    {screenplay.content}
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       {/* Edit mode save/cancel bar */}
@@ -757,34 +867,6 @@ function ScreenplayNode({ id, data, selected }: ScreenplayNodeProps) {
             <Save className="size-3" />
             保存修改
           </button>
-        </div>
-      )}
-
-      {/* Extraction progress */}
-      {isExtracting && (
-        <div className="mt-2.5 flex items-center justify-between gap-2 rounded-xl border border-primary/20 bg-primary/5 px-3.5 py-3">
-          <div className="flex items-center gap-2">
-            <Loader2 className="size-4 animate-spin text-primary" />
-            <span className="text-[12px] text-primary">{isDrama ? 'AI 正在提取全剧资产并生成剧集列表...' : 'AI 正在提取资产并规划分镜表...'}</span>
-          </div>
-          <button
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => abortRef.current?.abort()}
-            className="flex size-5 items-center justify-center rounded-full bg-red-500 transition-colors hover:bg-red-600"
-            title="中止"
-          >
-            <div className="size-1.5 rounded-sm bg-white" />
-          </button>
-        </div>
-      )}
-
-      {/* Extraction error */}
-      {extractError && !isExtracting && (
-        <div className="mt-2.5 rounded-xl border border-red-500/20 bg-red-500/5 px-3.5 py-2.5">
-          <div className="flex items-center gap-1.5 text-[12px] text-red-400">
-            <AlertCircle className="size-3.5" />
-            <span>提取失败：{extractError}</span>
-          </div>
         </div>
       )}
 

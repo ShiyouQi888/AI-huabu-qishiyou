@@ -4,6 +4,7 @@ import { CustomNodeData, NodeType, WorkflowSnapshot } from './store'
 const nodeTypeMap: Record<NodeType, string> = {
   text: 'textNode',
   image: 'imageNode',
+  imageLayer: 'imageLayerNode',
   video: 'videoNode',
   audio: 'audioNode',
   script: 'scriptNode',

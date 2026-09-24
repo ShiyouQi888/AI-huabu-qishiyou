@@ -1,5 +1,28 @@
 import nodemailer from 'nodemailer'
 
+export type VerifyCodePurpose = 'register' | 'change-email' | 'reset-password'
+
+const COPY_BY_PURPOSE: Record<VerifyCodePurpose, { subject: string; title: string; message: string; ignore: string }> = {
+  register: {
+    subject: '注册验证',
+    title: '验证您的邮箱',
+    message: '您正在注册 AI 画布工作台账号，请使用以下验证码完成邮箱验证：',
+    ignore: '如果您没有注册账号，请忽略此邮件。',
+  },
+  'change-email': {
+    subject: '邮箱变更验证',
+    title: '验证新邮箱',
+    message: '您正在修改 AI 画布工作台账号的邮箱，请使用以下验证码完成验证：',
+    ignore: '如果这不是您的操作，请忽略此邮件并检查账号安全。',
+  },
+  'reset-password': {
+    subject: '密码重置验证',
+    title: '重置您的密码',
+    message: '您正在重置 AI 画布工作台账号密码，请使用以下验证码完成验证：',
+    ignore: '如果这不是您的操作，请忽略此邮件，账号密码不会被更改。',
+  },
+}
+
 function getTransporter() {
   return nodemailer.createTransport({
     host: process.env.SMTP_HOST ?? 'smtp.gmail.com',
@@ -12,12 +35,17 @@ function getTransporter() {
   })
 }
 
-export async function sendVerifyCode(to: string, code: string): Promise<void> {
+export async function sendVerifyCode(
+  to: string,
+  code: string,
+  purpose: VerifyCodePurpose = 'register',
+): Promise<void> {
+  const copy = COPY_BY_PURPOSE[purpose]
   const from = `"AI 画布工作台" <${process.env.SMTP_FROM ?? process.env.SMTP_USER}>`
   await getTransporter().sendMail({
     from,
     to,
-    subject: `${code} — AI 画布工作台邮箱验证`,
+    subject: `${code} — AI 画布工作台${copy.subject}`,
     html: `
 <!DOCTYPE html>
 <html>
@@ -35,9 +63,9 @@ export async function sendVerifyCode(to: string, code: string): Promise<void> {
         </tr>
         <tr>
           <td style="padding:32px 32px 24px;">
-            <h2 style="margin:0 0 8px;color:#1a1916;font-size:20px;font-weight:700;">邮箱验证</h2>
+            <h2 style="margin:0 0 8px;color:#1a1916;font-size:20px;font-weight:700;">${copy.title}</h2>
             <p style="margin:0 0 24px;color:#6e6b64;font-size:14px;line-height:1.6;">
-              您正在注册 AI 画布工作台账号，请使用以下验证码完成邮箱验证：
+              ${copy.message}
             </p>
             <div style="background:#f5f4f0;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px;">
               <span style="font-size:36px;font-weight:700;letter-spacing:12px;color:#1a1916;font-variant-numeric:tabular-nums;">
@@ -46,7 +74,7 @@ export async function sendVerifyCode(to: string, code: string): Promise<void> {
             </div>
             <p style="margin:0;color:#9a9690;font-size:12px;line-height:1.6;">
               验证码 <strong>5 分钟内</strong>有效，请勿泄露给他人。<br>
-              如果您没有注册账号，请忽略此邮件。
+              ${copy.ignore}
             </p>
           </td>
         </tr>

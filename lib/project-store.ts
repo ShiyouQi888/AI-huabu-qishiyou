@@ -204,7 +204,15 @@ export const useProjectStore = create<ProjectState>()(
         await fetch(`/api/projects/${id}?scope=${encodeURIComponent(scope)}`, { method: 'DELETE' }).catch(() => {})
         if (id === activeProjectId) {
           if (remaining.length > 0) await get().switchProject(remaining[0].id)
-          else { set({ activeProjectId: null, activeCanEdit: true }); useFlowStore.getState().resetCanvas() }
+          else {
+            // Deleting the last project would otherwise leave activeProjectId null —
+            // every save path early-returns without one, so nothing would persist
+            // again until the user happened to click "+". Give them a fresh project
+            // immediately instead.
+            set({ activeProjectId: null, activeCanEdit: true })
+            useFlowStore.getState().resetCanvas()
+            await get().createProject()
+          }
         }
       },
 
@@ -386,5 +394,13 @@ export async function initStoreForUser(userId: string | null) {
   const { projects } = await apiList('personal')
   useProjectStore.setState({ teams, projects, loading: false })
 
-  if (projects.length > 0) await useProjectStore.getState().switchProject(projects[0].id)
+  if (projects.length > 0) {
+    await useProjectStore.getState().switchProject(projects[0].id)
+  } else {
+    // No projects yet (new user, or all previously deleted) — without an active
+    // project every save path early-returns, so nothing reaches the server until
+    // the user happens to click "+", and doing so later would wipe whatever they
+    // built in the meantime via resetCanvas(). Start them with one right away.
+    await useProjectStore.getState().createProject()
+  }
 }

@@ -28,6 +28,8 @@ import {
   CommandShortcut,
 } from '@/components/ui/command'
 import { NodeType, useFlowStore } from '@/lib/store'
+import { canvasCenterScreenPoint, nodeInitialData } from './sidebar-toolbar'
+import { useProjectStore } from '@/lib/project-store'
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false)
@@ -41,6 +43,8 @@ export function CommandPalette() {
   const edges = useFlowStore((s) => s.edges)
   const nodeCount = useFlowStore((s) => s.nodeCount)
   const loadCanvas = useFlowStore((s) => s.loadCanvas)
+  const sidebarCollapsed = useProjectStore((s) => s.sidebarCollapsed)
+  const sidebarWidth = sidebarCollapsed ? 0 : 240
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -55,14 +59,11 @@ export function CommandPalette() {
 
   const addNodeAtCenter = useCallback(
     (type: NodeType) => {
-      const pos = screenToFlowPosition({
-        x: window.innerWidth / 2,
-        y: window.innerHeight / 2,
-      })
-      addNode(type, pos)
+      const pos = screenToFlowPosition(canvasCenterScreenPoint(sidebarWidth))
+      addNode(type, pos, nodeInitialData(type))
       setOpen(false)
     },
-    [addNode, screenToFlowPosition]
+    [addNode, screenToFlowPosition, sidebarWidth]
   )
 
   const handleExportJSON = useCallback(() => {

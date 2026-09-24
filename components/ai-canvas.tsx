@@ -34,6 +34,7 @@ import { useTheme } from 'next-themes'
 
 import { CustomNodeData, EdgeStyleType, useFlowStore, NodeType } from '@/lib/store'
 import ImageNode from './nodes/image-node'
+import ImageLayerNode from './nodes/image-layer-node'
 import VideoNode from './nodes/video-node'
 import TextNode from './nodes/text-node'
 import AudioNode from './nodes/audio-node'
@@ -46,7 +47,13 @@ import GroupNode from './nodes/group-node'
 import PromptAssistantNode from './nodes/prompt-assistant-node'
 import GraphicNode from './nodes/graphic-node'
 import GraphicBriefNode from './nodes/graphic-brief-node'
-import { SidebarToolbar, nodeOptions, nodeInitialData } from './sidebar-toolbar'
+import {
+  SidebarToolbar,
+  canvasCenterScreenPoint,
+  fitViewAfterNodeMount,
+  nodeOptions,
+  nodeInitialData,
+} from './sidebar-toolbar'
 import { ZoomControls } from './zoom-controls'
 import { CanvasMenuPanel, CanvasMenuPanelType } from './canvas-menu-panel'
 import { CommandPalette } from './command-palette'
@@ -56,6 +63,7 @@ import { useProjectStore } from '@/lib/project-store'
 
 const nodeTypes = {
   imageNode: ImageNode,
+  imageLayerNode: ImageLayerNode,
   videoNode: VideoNode,
   textNode: TextNode,
   audioNode: AudioNode,
@@ -113,6 +121,8 @@ function Flow() {
   } = useFlowStore()
   const { screenToFlowPosition, fitView, getIntersectingNodes } = useReactFlow()
   const dragOverRef = useRef<string | null>(null)
+  const sidebarCollapsed = useProjectStore((s) => s.sidebarCollapsed)
+  const sidebarWidth = sidebarCollapsed ? 0 : 240
 
   useEffect(() => { setIsThemeMounted(true) }, [])
 
@@ -231,7 +241,7 @@ function Flow() {
         }
         closeMaterialPicker()
       } else {
-        const position = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
+        const position = screenToFlowPosition(canvasCenterScreenPoint(sidebarWidth))
         addNode(material.type, position, {
           label: material.title,
           status: material.url ? 'ready' : 'idle',
@@ -241,7 +251,7 @@ function Flow() {
         })
       }
     },
-    [addNode, screenToFlowPosition, materialPickerTarget, updateNodeData, closeMaterialPicker]
+    [addNode, screenToFlowPosition, sidebarWidth, materialPickerTarget, updateNodeData, closeMaterialPicker]
   )
 
   const deleteEdge = useFlowStore((s) => s.deleteEdge)
@@ -344,13 +354,11 @@ function Flow() {
   }, [fitView, handleDeleteSelected, handleDuplicateSelected, handleGroupSelected, handleCutSelectedEdges, selectedNodes.length, selectedEdges.length, undo, redo])
 
   const hasSelection = selectedNodes.length > 0
-  const sidebarCollapsed = useProjectStore((s) => s.sidebarCollapsed)
-  const sidebarWidth = sidebarCollapsed ? 0 : 240
 
   return (
     <div className="canvas-tech-grid size-full h-screen bg-background">
       <ProjectSidebar />
-      <div className="h-full transition-[margin] duration-200" style={{ marginLeft: sidebarWidth }}>
+      <div className="relative h-full transition-[margin] duration-200" style={{ marginLeft: sidebarWidth }}>
       <ReactFlow
         nodes={nodes}
         edges={displayEdges}
@@ -613,9 +621,9 @@ function EmptyCanvasGallery({ sidebarWidth }: { sidebarWidth: number }) {
   const { screenToFlowPosition, fitView } = useReactFlow()
 
   const handleAdd = (type: NodeType) => {
-    const position = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
+    const position = screenToFlowPosition(canvasCenterScreenPoint(sidebarWidth))
     addNode(type, position, nodeInitialData(type))
-    requestAnimationFrame(() => fitView({ duration: 300, padding: 0.3 }))
+    fitViewAfterNodeMount(fitView, type === 'storyboard' ? 0.22 : 0.3)
   }
 
   return (

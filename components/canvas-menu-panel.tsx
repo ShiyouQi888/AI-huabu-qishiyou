@@ -815,6 +815,7 @@ function ApiKeySettings() {
       })
       if (!res.ok) throw new Error('Save failed')
 
+      window.dispatchEvent(new Event('ai-config-updated'))
       setSaveResult({ id: providerId, ok: true })
       await fetchData()
       setTimeout(() => setSaveResult(null), 2500)

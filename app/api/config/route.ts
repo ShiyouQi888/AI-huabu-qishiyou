@@ -22,7 +22,10 @@ export async function GET() {
     apiKey: maskKey(c.apiKey),
     hasKey: !!c.apiKey,
   }))
-  return NextResponse.json({ configs })
+  return NextResponse.json(
+    { configs },
+    { headers: { 'Cache-Control': 'no-store' } },
+  )
 }
 
 export async function PUT(request: Request) {
@@ -37,9 +40,17 @@ export async function PUT(request: Request) {
       )
     }
 
-    setConfig(providerId, { apiKey, enabled, disabledModels })
+    const patch: Parameters<typeof setConfig>[1] = {}
+    if (typeof apiKey === 'string' && apiKey.length > 0) patch.apiKey = apiKey
+    if (typeof enabled === 'boolean') patch.enabled = enabled
+    if (Array.isArray(disabledModels)) patch.disabledModels = disabledModels
 
-    return NextResponse.json({ success: true })
+    setConfig(providerId, patch)
+
+    return NextResponse.json(
+      { success: true },
+      { headers: { 'Cache-Control': 'no-store' } },
+    )
   } catch {
     return NextResponse.json(
       { error: '请求格式错误' },

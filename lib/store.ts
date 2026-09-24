@@ -17,7 +17,7 @@ import {
   storyboardRowsToVideoPrompt,
 } from './storyboard-video-groups'
 
-export type NodeType = 'text' | 'image' | 'video' | 'audio' | 'script' | 'scene' | 'storyboard' | 'promptAssistant' | 'screenplay' | 'graphic' | 'graphicBrief' | 'episodeList' | 'videoSynthesis' | 'group'
+export type NodeType = 'text' | 'image' | 'imageLayer' | 'video' | 'audio' | 'script' | 'scene' | 'storyboard' | 'promptAssistant' | 'screenplay' | 'graphic' | 'graphicBrief' | 'episodeList' | 'videoSynthesis' | 'group'
 export type EdgeStyleType = 'curve' | 'straight'
 
 /** video 工具节点左侧的 4 个 tab 入参点（按 TABS 顺序） */
@@ -43,12 +43,12 @@ export const TARGET_HANDLES = new Set<string>([DEFAULT_TARGET_HANDLE, ...VIDEO_T
 /** 目标端口 → 允许连接的源节点类型列表 */
 export const HANDLE_SOURCE_TYPES: Record<string, NodeType[]> = {
   'tab-text2video': ['text', 'promptAssistant', 'scene', 'storyboard', 'graphicBrief'],
-  'tab-ref':        ['image', 'video', 'audio', 'text', 'promptAssistant', 'scene', 'storyboard', 'graphicBrief'],
+  'tab-ref':        ['image', 'imageLayer', 'video', 'audio', 'text', 'promptAssistant', 'scene', 'storyboard', 'graphicBrief'],
   'tab-firstlast':  ['image', 'text', 'promptAssistant', 'scene', 'storyboard', 'graphicBrief'],
   'tab-extend':     ['video', 'text', 'promptAssistant'],
   'tab-text2img':   ['text', 'promptAssistant', 'scene', 'storyboard', 'graphicBrief'],
-  'tab-img2img':    ['image', 'text', 'promptAssistant', 'scene', 'storyboard', 'graphicBrief'],
-  'tab-imgref':     ['image', 'text', 'promptAssistant', 'scene', 'storyboard', 'graphicBrief'],
+  'tab-img2img':    ['image', 'imageLayer', 'text', 'promptAssistant', 'scene', 'storyboard', 'graphicBrief'],
+  'tab-imgref':     ['image', 'imageLayer', 'text', 'promptAssistant', 'scene', 'storyboard', 'graphicBrief'],
   'tab-prompt':     ['text', 'promptAssistant', 'scene', 'storyboard', 'graphicBrief'],
 }
 
@@ -82,6 +82,8 @@ export interface CustomNodeData extends Record<string, unknown> {
   mode?: 'tool' | 'result' | 'input'
   content?: string
   imageUrl?: string
+  imageUrls?: string[]
+  layerItems?: Array<{ url: string; name?: string; description?: string; zIndex?: number; boundingBox?: number[] }>
   videoUrl?: string
   audioUrl?: string
   status?: 'idle' | 'ready' | 'generating' | 'completed' | 'failed'
@@ -349,6 +351,7 @@ const getEdgeType = (_style: EdgeStyleType) => 'default' as const
 const emptyNodeCount: Record<NodeType, number> = {
   text: 0,
   image: 0,
+  imageLayer: 0,
   video: 0,
   audio: 0,
   script: 0,
@@ -573,6 +576,7 @@ const validateConnection = (
 const NODE_TYPE_MAP: Record<NodeType, string> = {
   text: 'textNode',
   image: 'imageNode',
+  imageLayer: 'imageLayerNode',
   video: 'videoNode',
   audio: 'audioNode',
   script: 'scriptNode',
@@ -590,13 +594,14 @@ const NODE_TYPE_MAP: Record<NodeType, string> = {
 const LABEL_MAP: Record<NodeType, string> = {
   text: 'AI 文本',
   image: 'AI 生图',
+  imageLayer: '图片分层',
   video: 'AI 视频',
   audio: '音频节点',
   script: 'AI 编剧',
   scene: '分镜',
   storyboard: '分镜表',
   promptAssistant: '提示词助手',
-  screenplay: '剧本',
+  screenplay: 'AI 剧本',
   graphic: 'AI 平面',
   graphicBrief: '创意方案',
   episodeList: '剧集列表',
@@ -1689,6 +1694,11 @@ export const useFlowStore = create<FlowState>()(
               locations: locations.map((l) => l.name),
               assetRefs: { chars: charRefs, locs: locRefs, props: propRefs },
               episodes: listEpisodes,
+              // Carried forward from the story bible so per-episode generation can stay
+              // consistent with hard constraints across dozens of episodes.
+              mustKeep: spContent.storyBible?.mustKeep,
+              taboo: spContent.storyBible?.taboo,
+              coreConflict: spContent.storyBible?.coreConflict,
             }),
           },
         })

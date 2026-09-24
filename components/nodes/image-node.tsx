@@ -62,7 +62,12 @@ function ImageInputNode({ id, data, selected }: ImageNodeProps) {
       status={data.status}
       selected={selected}
       onDelete={() => deleteNode(id)}
-      icon={<ImageIcon className="size-3.5" />}
+      icon={(
+        <span className="relative flex size-4 items-center justify-center text-sky-400">
+          <ImageIcon className="size-3.5" />
+          <Upload className="absolute -bottom-1 -right-1 size-2.5 rounded-sm bg-card p-px" />
+        </span>
+      )}
       hasInput={false}
       hasOutput={true}
       widthPx={nodeWidth}
@@ -289,7 +294,7 @@ function ImageToolNode({ id, data, selected }: ImageNodeProps) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'doubao-seed-2-0-pro-260215',
+          model: 'doubao-seed-evolving',
           prompt,
           systemPrompt: `你是一个专业的AI绘画提示词优化师。请将用户输入优化为一个高质量的中文绘画提示词。要求:
 1. 如果输入是简短描述,扩展细节(光线、构图、风格、材质、色彩)
@@ -420,7 +425,7 @@ function ImageToolNode({ id, data, selected }: ImageNodeProps) {
         '16:9':  '2560x1440',
         '9:16':  '1440x2560',
       }
-      const needsHires = selectedModel.includes('seedream-5') || selectedModel.includes('seedream-4-5')
+      const needsHires = selectedModel.includes('seedream-5')
       const ratioToSize = needsHires ? hiresSize : standardSize
       const [wStr, hStr] = (ratioToSize[ratio] || (needsHires ? '1920x1920' : '1024x1024')).split('x')
       const resW = parseInt(wStr, 10)
